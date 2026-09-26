@@ -610,9 +610,9 @@ final class SlitherlinkSolver {
     if (--budget.remaining < 0) {
       throw StateError('Solver search budget exceeded.');
     }
-    final propagation = _propagate(puzzle, input);
+    final propagation = _propagateForSearch(puzzle, input);
     if (propagation == null) return 0;
-    final state = propagation.state;
+    final state = propagation;
     if (_isComplete(puzzle, state)) return 1;
     final edge = _nextUndecidedEdge(puzzle, state);
     if (edge == null) return 0;
@@ -630,6 +630,81 @@ final class SlitherlinkSolver {
       limit - lineCount,
     );
     return lineCount + crossCount;
+  }
+
+  SlitherlinkState? _propagateForSearch(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState input,
+  ) {
+    var state = input;
+    while (true) {
+      final assignments = <EdgeId, SlitherlinkEdgeState>{};
+      var contradiction = false;
+
+      void forceEdges(List<EdgeId> edges, SlitherlinkEdgeState target) {
+        for (final edge in edges) {
+          final existing = assignments[edge];
+          if (existing != null && existing != target) {
+            contradiction = true;
+            return;
+          }
+          assignments[edge] = target;
+        }
+      }
+
+      for (final entry in puzzle.clues.entries) {
+        final unknown = <EdgeId>[];
+        var lines = 0;
+        for (final edge in puzzle.topology.edgesAround(entry.key)) {
+          switch (state.stateOf(edge)) {
+            case SlitherlinkEdgeState.line:
+              lines++;
+            case SlitherlinkEdgeState.empty:
+              unknown.add(edge);
+            case SlitherlinkEdgeState.crossed:
+              break;
+          }
+        }
+        if (lines > entry.value || lines + unknown.length < entry.value) {
+          return null;
+        }
+        if (unknown.isNotEmpty && lines == entry.value) {
+          forceEdges(unknown, SlitherlinkEdgeState.crossed);
+        } else if (unknown.isNotEmpty &&
+            lines + unknown.length == entry.value) {
+          forceEdges(unknown, SlitherlinkEdgeState.line);
+        }
+        if (contradiction) return null;
+      }
+
+      for (var row = 0; row <= puzzle.topology.rows; row++) {
+        for (var column = 0; column <= puzzle.topology.columns; column++) {
+          final unknown = <EdgeId>[];
+          var lines = 0;
+          for (final edge in puzzle.topology.edgesAt(VertexId(row, column))) {
+            switch (state.stateOf(edge)) {
+              case SlitherlinkEdgeState.line:
+                lines++;
+              case SlitherlinkEdgeState.empty:
+                unknown.add(edge);
+              case SlitherlinkEdgeState.crossed:
+                break;
+            }
+          }
+          if (lines > 2 || (lines == 1 && unknown.isEmpty)) return null;
+          if (unknown.isEmpty) continue;
+          if (lines == 2 || (lines == 0 && unknown.length == 1)) {
+            forceEdges(unknown, SlitherlinkEdgeState.crossed);
+          } else if (lines == 1 && unknown.length == 1) {
+            forceEdges(unknown, SlitherlinkEdgeState.line);
+          }
+          if (contradiction) return null;
+        }
+      }
+
+      if (assignments.isEmpty) return state;
+      state = state.withEdges(assignments);
+    }
   }
 
   bool _isComplete(SlitherlinkPuzzle puzzle, SlitherlinkState state) {

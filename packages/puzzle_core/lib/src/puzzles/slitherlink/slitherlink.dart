@@ -25,6 +25,18 @@ final class SlitherlinkState {
     }
     return SlitherlinkState(edges);
   }
+
+  SlitherlinkState withEdges(Map<EdgeId, SlitherlinkEdgeState> updates) {
+    final edges = Map<EdgeId, SlitherlinkEdgeState>.from(_edges);
+    for (final entry in updates.entries) {
+      if (entry.value == SlitherlinkEdgeState.empty) {
+        edges.remove(entry.key);
+      } else {
+        edges[entry.key] = entry.value;
+      }
+    }
+    return SlitherlinkState(edges);
+  }
 }
 
 sealed class SlitherlinkAction implements PuzzleAction {

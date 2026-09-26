@@ -183,6 +183,21 @@ void main() {
     expect(generated.solveResult.hasUniqueSolution, isTrue);
   });
 
+  test('fast generation path proves the returned puzzle is unique', () {
+    final generated = const SlitherlinkGenerator().generate(
+      const SlitherlinkGenerationOptions(
+        rows: 3,
+        columns: 3,
+        difficulty: PuzzleDifficulty.normal,
+        includeSolveSteps: false,
+        seed: 19,
+      ),
+    );
+
+    expect(generated.solveResult.steps, isEmpty);
+    expect(const SlitherlinkSolver().countSolutions(generated.puzzle), 1);
+  });
+
   test('difficulty tiers produce increasing reasoning demands', () {
     final generator = const SlitherlinkGenerator();
     final easy = generator.generate(
