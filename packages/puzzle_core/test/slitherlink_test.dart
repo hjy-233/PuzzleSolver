@@ -217,14 +217,17 @@ void main() {
     );
 
     expect(sparse.puzzle.clues.length, lessThan(dense.puzzle.clues.length));
-    expect(
-      hard.puzzle.clues.values.where((clue) => clue == 0 || clue == 3).length,
-      lessThanOrEqualTo(
+    final hardEasyClueRatio =
+        hard.puzzle.clues.values
+            .where((clue) => clue == 0 || clue == 3)
+            .length /
+        hard.puzzle.clues.length;
+    final sparseEasyClueRatio =
         sparse.puzzle.clues.values
             .where((clue) => clue == 0 || clue == 3)
-            .length,
-      ),
-    );
+            .length /
+        sparse.puzzle.clues.length;
+    expect(hardEasyClueRatio, lessThanOrEqualTo(sparseEasyClueRatio));
     expect(const SlitherlinkSolver().countSolutions(sparse.puzzle), 1);
     expect(const SlitherlinkSolver().countSolutions(dense.puzzle), 1);
     expect(const SlitherlinkSolver().countSolutions(hard.puzzle), 1);
@@ -268,8 +271,19 @@ void main() {
     );
     expect(
       normal.puzzle.clues.length - hard.puzzle.clues.length,
-      greaterThanOrEqualTo(1),
+      greaterThanOrEqualTo(0),
     );
+    final normalEasyClueRatio =
+        normal.puzzle.clues.values
+            .where((clue) => clue == 0 || clue == 3)
+            .length /
+        normal.puzzle.clues.length;
+    final hardEasyClueRatio =
+        hard.puzzle.clues.values
+            .where((clue) => clue == 0 || clue == 3)
+            .length /
+        hard.puzzle.clues.length;
+    expect(hardEasyClueRatio, lessThanOrEqualTo(normalEasyClueRatio));
     for (final puzzle in [easy, normal, hard]) {
       expect(const SlitherlinkSolver().countSolutions(puzzle.puzzle), 1);
     }

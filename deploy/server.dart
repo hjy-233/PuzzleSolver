@@ -157,7 +157,7 @@ Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
       columns: columns,
       difficulty: difficulty,
       includeBlankCells: body['includeBlankCells'] as bool? ?? true,
-      clueDensity: (rawClueDensity as num?)?.toDouble() ?? 0.5,
+      clueDensity: (rawClueDensity as num?)?.toDouble() ?? 0.55,
       includeSolveSteps: false,
     ),
   );

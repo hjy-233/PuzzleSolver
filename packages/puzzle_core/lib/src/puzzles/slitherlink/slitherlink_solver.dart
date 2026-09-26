@@ -49,7 +49,7 @@ final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
     required this.columns,
     this.difficulty = PuzzleDifficulty.normal,
     this.includeBlankCells = true,
-    this.clueDensity = 0.5,
+    this.clueDensity = 0.55,
     this.includeSolveSteps = true,
     this.seed,
   });
@@ -114,7 +114,7 @@ final class SlitherlinkGenerator
             (true, PuzzleDifficulty.hard) => 3,
             (false, PuzzleDifficulty.easy) => 1,
             (false, PuzzleDifficulty.normal) => 6,
-            (false, PuzzleDifficulty.hard) => 8,
+            (false, PuzzleDifficulty.hard) => 12,
           }
         : switch (options.difficulty) {
             PuzzleDifficulty.easy => 1,
@@ -185,8 +185,6 @@ final class SlitherlinkGenerator
                     rows: options.rows,
                     columns: options.columns,
                   ),
-                  preferDifficultClues:
-                      options.difficulty == PuzzleDifficulty.hard,
                 ) ??
                 fullClues
           : fullClues;
@@ -232,7 +230,10 @@ final class SlitherlinkGenerator
     final range = switch (difficulty) {
       PuzzleDifficulty.easy => (4, (maximumSize * .55).round()),
       PuzzleDifficulty.normal => (7, (maximumSize * .75).round()),
-      PuzzleDifficulty.hard => (9, maximumSize),
+      PuzzleDifficulty.hard => (
+        max(9, (maximumSize * .8).round()),
+        maximumSize,
+      ),
     };
     final lowerBound = range.$1.clamp(1, maximumSize);
     final upperBound = range.$2.clamp(lowerBound, maximumSize);
@@ -288,21 +289,9 @@ final class SlitherlinkGenerator
     required SlitherlinkSolver solver,
     required int? maximumChecks,
     required int minimumClueCount,
-    required bool preferDifficultClues,
   }) {
     final clues = Map<CellId, int>.from(fullClues);
     final order = fullClues.keys.toList()..shuffle(random);
-    if (preferDifficultClues) {
-      order.sort((a, b) {
-        final aEasy = fullClues[a] == 0 || fullClues[a] == 3;
-        final bEasy = fullClues[b] == 0 || fullClues[b] == 3;
-        return aEasy == bEasy
-            ? 0
-            : aEasy
-            ? -1
-            : 1;
-      });
-    }
     var cursor = 0;
     var batchSize = max(1, ((clues.length - minimumClueCount) / 12).ceil());
     final checkLimit =
@@ -358,7 +347,7 @@ final class SlitherlinkGenerator
     final difficultyClueRatio = switch (options.difficulty) {
       PuzzleDifficulty.easy => .68,
       PuzzleDifficulty.normal => .42,
-      PuzzleDifficulty.hard => .25,
+      PuzzleDifficulty.hard => .16,
     };
     final baseFloor = max(
       (fullClueCount * difficultyClueRatio).ceil(),
@@ -387,7 +376,7 @@ final class SlitherlinkGenerator
     final targetClueRatio = switch (options.difficulty) {
       PuzzleDifficulty.easy => .68,
       PuzzleDifficulty.normal => .47,
-      PuzzleDifficulty.hard => .32,
+      PuzzleDifficulty.hard => .25,
     };
     final targetSearchSteps = switch (options.difficulty) {
       PuzzleDifficulty.easy => 0,
@@ -412,9 +401,7 @@ final class SlitherlinkGenerator
     return (clueRatio - targetClueRatio).abs() * 2 +
         searchPenalty +
         (stepRatio - targetStepRatio).abs() * .35 +
-        (options.difficulty == PuzzleDifficulty.hard
-            ? max(0, easyClueRatio - .2) * 2
-            : 0);
+        (options.difficulty == PuzzleDifficulty.hard ? easyClueRatio * 20 : 0);
   }
 }
 

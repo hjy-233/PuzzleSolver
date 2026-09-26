@@ -30,7 +30,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   bool _editingClues = false;
   PuzzleDifficulty _difficulty = PuzzleDifficulty.normal;
   bool _includeBlankCells = true;
-  double _clueDensity = 0.5;
+  double _clueDensity = 0.55;
   bool _isBusy = false;
   String _status = '左键画线，右键打叉。';
 
