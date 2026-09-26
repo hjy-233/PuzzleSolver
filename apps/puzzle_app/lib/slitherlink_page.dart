@@ -30,6 +30,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   bool _editingClues = false;
   PuzzleDifficulty _difficulty = PuzzleDifficulty.normal;
   bool _includeBlankCells = true;
+  double _clueDensity = 0.5;
   bool _isBusy = false;
   String _status = '左键画线，右键打叉。';
 
@@ -89,6 +90,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         columns: columns,
         difficulty: _difficulty,
         includeBlankCells: _includeBlankCells,
+        clueDensity: _clueDensity,
       );
       if (!mounted) return;
       setState(() {
@@ -460,11 +462,14 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
             columnsController: _columnsController,
             difficulty: _difficulty,
             includeBlankCells: _includeBlankCells,
+            clueDensity: _clueDensity,
             onRowsChanged: (value) => _updateDimension(value, rows: true),
             onColumnsChanged: (value) => _updateDimension(value, rows: false),
             onDifficultyChanged: (value) => setState(() => _difficulty = value),
             onIncludeBlankCellsChanged: (value) =>
                 setState(() => _includeBlankCells = value),
+            onClueDensityChanged: (value) =>
+                setState(() => _clueDensity = value),
             onGenerate: () => unawaited(_newPuzzle()),
             onManualEntry: _startManualEntry,
             onFinishManualEntry: _finishManualEntry,
@@ -637,10 +642,12 @@ class _Controls extends StatelessWidget {
     required this.columnsController,
     required this.difficulty,
     required this.includeBlankCells,
+    required this.clueDensity,
     required this.onRowsChanged,
     required this.onColumnsChanged,
     required this.onDifficultyChanged,
     required this.onIncludeBlankCellsChanged,
+    required this.onClueDensityChanged,
     required this.onGenerate,
     required this.onManualEntry,
     required this.onFinishManualEntry,
@@ -656,10 +663,12 @@ class _Controls extends StatelessWidget {
   final TextEditingController columnsController;
   final PuzzleDifficulty difficulty;
   final bool includeBlankCells;
+  final double clueDensity;
   final ValueChanged<String> onRowsChanged;
   final ValueChanged<String> onColumnsChanged;
   final ValueChanged<PuzzleDifficulty> onDifficultyChanged;
   final ValueChanged<bool> onIncludeBlankCellsChanged;
+  final ValueChanged<double> onClueDensityChanged;
   final VoidCallback onGenerate;
   final VoidCallback onManualEntry;
   final VoidCallback onFinishManualEntry;
@@ -731,6 +740,16 @@ class _Controls extends StatelessWidget {
           value: includeBlankCells,
           onChanged: onIncludeBlankCellsChanged,
         ),
+        Text('生成密度 ${(clueDensity * 100).round()}%'),
+        Slider(
+          value: clueDensity,
+          min: 0,
+          max: 1,
+          divisions: 20,
+          label: '${(clueDensity * 100).round()}%',
+          onChanged: onClueDensityChanged,
+        ),
+        const Text('基准值为 50%；调高后数字更多、空白格更少。'),
         FilledButton.icon(
           onPressed: isBusy ? null : onGenerate,
           icon: isBusy

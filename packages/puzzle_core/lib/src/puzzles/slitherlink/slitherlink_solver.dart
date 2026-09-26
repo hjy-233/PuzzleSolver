@@ -40,6 +40,8 @@ enum PuzzleDifficulty { easy, normal, hard }
 /// Generation controls owned by Slitherlink.
 ///
 /// [includeBlankCells] controls whether some cells may omit a clue entirely.
+/// [clueDensity] adjusts density around each difficulty's default; 0.5 keeps
+/// the default, while higher values retain more clues.
 /// [seed] is optional and makes a generated puzzle reproducible when given.
 final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
   const SlitherlinkGenerationOptions({
@@ -47,6 +49,7 @@ final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
     required this.columns,
     this.difficulty = PuzzleDifficulty.normal,
     this.includeBlankCells = true,
+    this.clueDensity = 0.5,
     this.includeSolveSteps = true,
     this.seed,
   });
@@ -55,6 +58,9 @@ final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
   final int columns;
   final PuzzleDifficulty difficulty;
   final bool includeBlankCells;
+
+  /// Density adjustment from 0.0 (sparser) to 1.0 (denser).
+  final double clueDensity;
   final bool includeSolveSteps;
   final int? seed;
 }
@@ -76,6 +82,15 @@ final class SlitherlinkGenerator
   GeneratedSlitherlinkPuzzle generate(SlitherlinkGenerationOptions options) {
     if (options.rows < 1 || options.columns < 1) {
       throw ArgumentError('A generated puzzle needs at least one cell.');
+    }
+    if (!options.clueDensity.isFinite ||
+        options.clueDensity < 0 ||
+        options.clueDensity > 1) {
+      throw ArgumentError.value(
+        options.clueDensity,
+        'clueDensity',
+        'Must be between 0.0 and 1.0.',
+      );
     }
     final random = Random(options.seed);
     final solver = const SlitherlinkSolver();
@@ -170,6 +185,8 @@ final class SlitherlinkGenerator
                     rows: options.rows,
                     columns: options.columns,
                   ),
+                  preferDifficultClues:
+                      options.difficulty == PuzzleDifficulty.hard,
                 ) ??
                 fullClues
           : fullClues;
@@ -271,9 +288,21 @@ final class SlitherlinkGenerator
     required SlitherlinkSolver solver,
     required int? maximumChecks,
     required int minimumClueCount,
+    required bool preferDifficultClues,
   }) {
     final clues = Map<CellId, int>.from(fullClues);
     final order = fullClues.keys.toList()..shuffle(random);
+    if (preferDifficultClues) {
+      order.sort((a, b) {
+        final aEasy = fullClues[a] == 0 || fullClues[a] == 3;
+        final bEasy = fullClues[b] == 0 || fullClues[b] == 3;
+        return aEasy == bEasy
+            ? 0
+            : aEasy
+            ? -1
+            : 1;
+      });
+    }
     var cursor = 0;
     var batchSize = max(1, ((clues.length - minimumClueCount) / 12).ceil());
     final checkLimit =
@@ -325,18 +354,19 @@ final class SlitherlinkGenerator
     required int columns,
   }) {
     if (fullClueCount <= 1) return fullClueCount;
-    final preferred = switch (options.difficulty) {
-      PuzzleDifficulty.easy => (fullClueCount * .68).ceil(),
-      PuzzleDifficulty.normal => (fullClueCount * .42).ceil(),
-      PuzzleDifficulty.hard => (fullClueCount * .25).ceil(),
-    };
     final area = rows * columns;
-    final scaleFloor = switch (options.difficulty) {
-      PuzzleDifficulty.easy => (area * .28).ceil(),
-      PuzzleDifficulty.normal => (area * .20).ceil(),
-      PuzzleDifficulty.hard => (area * .13).ceil(),
+    final difficultyClueRatio = switch (options.difficulty) {
+      PuzzleDifficulty.easy => .68,
+      PuzzleDifficulty.normal => .42,
+      PuzzleDifficulty.hard => .25,
     };
-    return max(1, max(preferred, scaleFloor)).clamp(1, fullClueCount - 1);
+    final baseFloor = max(
+      (fullClueCount * difficultyClueRatio).ceil(),
+      (area * difficultyClueRatio / 2).ceil(),
+    );
+    final adjustBy =
+        ((fullClueCount - baseFloor) * (options.clueDensity - .5) * 2).round();
+    return max(1, baseFloor + adjustBy).clamp(1, fullClueCount - 1);
   }
 
   double _difficultyDistance(
@@ -346,6 +376,11 @@ final class SlitherlinkGenerator
     final topology = candidate.puzzle.topology;
     final clueRatio =
         candidate.puzzle.clues.length / (topology.rows * topology.columns);
+    final easyClueRatio =
+        candidate.puzzle.clues.values
+            .where((clue) => clue == 0 || clue == 3)
+            .length /
+        candidate.puzzle.clues.length;
     final searchSteps = candidate.solveResult.steps
         .where((step) => step.ruleId == 'slitherlink.assumptionContradiction')
         .length;
@@ -376,7 +411,10 @@ final class SlitherlinkGenerator
         : (searchSteps - targetSearchSteps).abs() * .22;
     return (clueRatio - targetClueRatio).abs() * 2 +
         searchPenalty +
-        (stepRatio - targetStepRatio).abs() * .35;
+        (stepRatio - targetStepRatio).abs() * .35 +
+        (options.difficulty == PuzzleDifficulty.hard
+            ? max(0, easyClueRatio - .2) * 2
+            : 0);
   }
 }
 

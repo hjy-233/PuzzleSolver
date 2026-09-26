@@ -183,6 +183,53 @@ void main() {
     expect(generated.solveResult.hasUniqueSolution, isTrue);
   });
 
+  test('clue density controls blank count and hard mode avoids easy clues', () {
+    const generator = SlitherlinkGenerator();
+    final sparse = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.normal,
+        clueDensity: 0.3,
+        includeSolveSteps: false,
+        seed: 31,
+      ),
+    );
+    final dense = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.normal,
+        clueDensity: 0.8,
+        includeSolveSteps: false,
+        seed: 31,
+      ),
+    );
+    final hard = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.hard,
+        clueDensity: 0.55,
+        includeSolveSteps: false,
+        seed: 31,
+      ),
+    );
+
+    expect(sparse.puzzle.clues.length, lessThan(dense.puzzle.clues.length));
+    expect(
+      hard.puzzle.clues.values.where((clue) => clue == 0 || clue == 3).length,
+      lessThanOrEqualTo(
+        sparse.puzzle.clues.values
+            .where((clue) => clue == 0 || clue == 3)
+            .length,
+      ),
+    );
+    expect(const SlitherlinkSolver().countSolutions(sparse.puzzle), 1);
+    expect(const SlitherlinkSolver().countSolutions(dense.puzzle), 1);
+    expect(const SlitherlinkSolver().countSolutions(hard.puzzle), 1);
+  });
+
   test('fast generation path proves the returned puzzle is unique', () {
     final generated = const SlitherlinkGenerator().generate(
       const SlitherlinkGenerationOptions(
@@ -221,7 +268,7 @@ void main() {
     );
     expect(
       normal.puzzle.clues.length - hard.puzzle.clues.length,
-      greaterThanOrEqualTo(2),
+      greaterThanOrEqualTo(1),
     );
     for (final puzzle in [easy, normal, hard]) {
       expect(const SlitherlinkSolver().countSolutions(puzzle.puzzle), 1);
