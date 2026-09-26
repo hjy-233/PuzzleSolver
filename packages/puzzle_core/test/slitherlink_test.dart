@@ -182,4 +182,38 @@ void main() {
     expect(generated.puzzle.clues, hasLength(9));
     expect(generated.solveResult.hasUniqueSolution, isTrue);
   });
+
+  test('difficulty tiers produce increasing reasoning demands', () {
+    final generator = const SlitherlinkGenerator();
+    final easy = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.easy,
+        seed: 23,
+      ),
+    );
+    final normal = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.normal,
+        seed: 23,
+      ),
+    );
+    final hard = generator.generate(
+      const SlitherlinkGenerationOptions(
+        rows: 5,
+        columns: 5,
+        difficulty: PuzzleDifficulty.hard,
+        seed: 23,
+      ),
+    );
+
+    expect(easy.puzzle.clues.length, greaterThan(normal.puzzle.clues.length));
+    expect(normal.puzzle.clues.length, greaterThan(hard.puzzle.clues.length));
+    expect(easy.solveResult.hasUniqueSolution, isTrue);
+    expect(normal.solveResult.hasUniqueSolution, isTrue);
+    expect(hard.solveResult.hasUniqueSolution, isTrue);
+  });
 }

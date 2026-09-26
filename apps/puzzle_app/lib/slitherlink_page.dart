@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:puzzle_core/puzzle_core.dart';
 
+import 'slitherlink_api.dart';
+
 class SlitherlinkPage extends StatefulWidget {
   const SlitherlinkPage({super.key});
 
@@ -12,8 +14,7 @@ class SlitherlinkPage extends StatefulWidget {
 }
 
 class _SlitherlinkPageState extends State<SlitherlinkPage> {
-  static const _generator = SlitherlinkGenerator();
-  static const _solver = SlitherlinkSolver();
+  static const _api = SlitherlinkApi();
 
   late SlitherlinkPuzzle _puzzle;
   late PuzzleSession<SlitherlinkState, SlitherlinkAction> _session;
@@ -22,28 +23,37 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   List<PuzzleTarget> _highlights = [];
   Timer? _highlightTimer;
   int? _selectedStepIndex;
-  int _boardSize = 5;
+  final _rowsController = TextEditingController(text: '5');
+  final _columnsController = TextEditingController(text: '5');
+  int _rows = 5;
+  int _columns = 5;
+  bool _editingClues = false;
   PuzzleDifficulty _difficulty = PuzzleDifficulty.normal;
   bool _includeBlankCells = true;
+  bool _isBusy = false;
   String _status = '左键画线，右键打叉。';
 
   @override
   void initState() {
     super.initState();
-    _replaceWithGeneratedPuzzle();
+    _puzzle = SlitherlinkPuzzle(
+      topology: const GridTopology(rows: 5, columns: 5),
+      clues: const {},
+    );
+    _session = PuzzleSession.start(
+      initialState: _puzzle.initialState,
+      reducer: _puzzle.reduce,
+    );
+    unawaited(_newPuzzle());
   }
 
-  void _replaceWithGeneratedPuzzle() {
-    final generated = _generator.generate(
-      SlitherlinkGenerationOptions(
-        rows: _boardSize,
-        columns: _boardSize,
-        difficulty: _difficulty,
-        includeBlankCells: _includeBlankCells,
-        seed: DateTime.now().microsecondsSinceEpoch,
-      ),
-    );
-    _puzzle = generated.puzzle;
+  void _replaceWithGeneratedPuzzle(SlitherlinkPuzzle puzzle) {
+    _puzzle = puzzle;
+    _rows = _puzzle.topology.rows;
+    _columns = _puzzle.topology.columns;
+    _rowsController.text = '$_rows';
+    _columnsController.text = '$_columns';
+    _editingClues = false;
     _session = PuzzleSession.start(
       initialState: _puzzle.initialState,
       reducer: _puzzle.reduce,
@@ -55,9 +65,163 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     _status = '已生成唯一解新题。左键画线，右键打叉。';
   }
 
-  void _newPuzzle() {
+  Future<void> _newPuzzle() async {
+    final rows = int.tryParse(_rowsController.text);
+    final columns = int.tryParse(_columnsController.text);
+    if (rows == null || columns == null || rows < 1 || columns < 1) {
+      setState(() => _status = '请填写有效的正整数行数和列数。');
+      return;
+    }
+    _rows = rows;
+    _columns = columns;
+    if (rows * columns > 100) {
+      setState(() => _status = '棋盘最多支持 100 格；请调小宽或高。');
+      return;
+    }
     _cancelHighlightFlash();
-    setState(_replaceWithGeneratedPuzzle);
+    setState(() {
+      _isBusy = true;
+      _status = '正在请求 Pi 生成题目…';
+    });
+    try {
+      final puzzle = await _api.generate(
+        rows: rows,
+        columns: columns,
+        difficulty: _difficulty,
+        includeBlankCells: _includeBlankCells,
+      );
+      if (!mounted) return;
+      setState(() {
+        _replaceWithGeneratedPuzzle(puzzle);
+        _isBusy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = 'Pi 生成失败：$error';
+      });
+    }
+  }
+
+  void _startManualEntry() {
+    final rows = int.tryParse(_rowsController.text) ?? 0;
+    final columns = int.tryParse(_columnsController.text) ?? 0;
+    if (rows < 1 || columns < 1 || rows * columns > 100) {
+      setState(() => _status = '行数和列数须为正整数，棋盘最多 100 格。');
+      return;
+    }
+    _cancelHighlightFlash();
+    setState(() {
+      _puzzle = SlitherlinkPuzzle(
+        topology: GridTopology(rows: rows, columns: columns),
+        clues: const {},
+      );
+      _session = PuzzleSession.start(
+        initialState: _puzzle.initialState,
+        reducer: _puzzle.reduce,
+      );
+      _steps = [];
+      _stepBaseState = null;
+      _highlights = [];
+      _selectedStepIndex = null;
+      _editingClues = true;
+      _status = '点击格子填写 0–4；空白格留空。填完后点“完成录入”再自动解题。';
+    });
+  }
+
+  void _finishManualEntry() {
+    setState(() {
+      _editingClues = false;
+      _status = _puzzle.clues.isEmpty
+          ? '还没有录入数字。点击“录入已有题目”继续录入。'
+          : '题目已录入 ${_puzzle.clues.length} 个数字，可以自动解题。';
+    });
+  }
+
+  Future<void> _editClue(CellId cell) async {
+    final controller = TextEditingController(
+      text: _puzzle.clues[cell]?.toString() ?? '',
+    );
+    final formKey = GlobalKey<FormState>();
+    final result = await showDialog<_ClueEditResult>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('填写数字'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: '0–4，留空表示空白格',
+              border: OutlineInputBorder(),
+            ),
+            validator: (text) {
+              if (text == null || text.trim().isEmpty) return null;
+              final value = int.tryParse(text.trim());
+              return value != null && value >= 0 && value <= 4
+                  ? null
+                  : '请输入 0 到 4 的整数';
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, const _ClueEditResult(null)),
+            child: const Text('清除'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() != true) return;
+              final text = controller.text.trim();
+              final value = text.isEmpty ? null : int.tryParse(text);
+              Navigator.pop(context, _ClueEditResult(value));
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || !mounted) return;
+    final clues = Map<CellId, int>.from(_puzzle.clues);
+    if (result.value == null) {
+      clues.remove(cell);
+    } else {
+      clues[cell] = result.value!;
+    }
+    _cancelHighlightFlash();
+    setState(() {
+      _puzzle = SlitherlinkPuzzle(topology: _puzzle.topology, clues: clues);
+      _session = PuzzleSession.start(
+        initialState: _puzzle.initialState,
+        reducer: _puzzle.reduce,
+      );
+      _steps = [];
+      _stepBaseState = null;
+      _highlights = [];
+      _selectedStepIndex = null;
+      _status = '题目已更新。';
+    });
+  }
+
+  void _updateDimension(String text, {required bool rows}) {
+    final value = int.tryParse(text);
+    if (value == null || value < 1) return;
+    setState(() {
+      if (rows) {
+        _rows = value;
+      } else {
+        _columns = value;
+      }
+    });
   }
 
   void _handleGesture(PuzzleTarget target, PointerGesture gesture) {
@@ -96,16 +260,26 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     });
   }
 
-  void _solve() {
+  Future<void> _solve() async {
     if (_puzzle.check(_session.state).status == CheckStatus.solved) {
       setState(() => _status = '当前棋盘已经解完。');
       return;
     }
     try {
+      if (_puzzle.clues.isEmpty) {
+        setState(() => _status = '先录入题目数字，再自动解题。');
+        return;
+      }
       final baseState = _steps.isEmpty ? _session.state : null;
-      final result = _solver.solve(_puzzle, initialState: _session.state);
+      setState(() {
+        _isBusy = true;
+        _status = '正在请求 Pi 自动解题…';
+      });
+      final result = await _api.solve(_puzzle, _session.state);
+      if (!mounted) return;
       if (!result.hasUniqueSolution) {
         setState(() {
+          _isBusy = false;
           _status = '当前局面不止一个解，不能自动确认唯一答案。';
         });
         return;
@@ -121,22 +295,41 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _stepBaseState ??= baseState;
         _highlights = [];
         _selectedStepIndex = null;
+        _isBusy = false;
         _status = '自动解题完成：${result.steps.length} 个可解释步骤。';
       });
-    } on StateError catch (error) {
-      setState(() => _status = '自动解题失败：${error.message}');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = '自动解题失败：$error';
+      });
     }
   }
 
-  void _check() {
-    final result = _puzzle.check(_session.state);
+  Future<void> _check() async {
     setState(() {
-      _status = switch (result.status) {
-        CheckStatus.solved => '完成：所有数字满足条件，并且只有一个闭环。',
-        CheckStatus.invalid => '当前状态矛盾：${_checkMessage(result.messageKey)}',
-        CheckStatus.incomplete => '还没有完成；可以继续推理或使用提示。',
-      };
+      _isBusy = true;
+      _status = '正在请求 Pi 检查答案…';
     });
+    try {
+      final result = await _api.check(_puzzle, _session.state);
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = switch (result.status) {
+          CheckStatus.solved => '完成：所有数字满足条件，并且只有一个闭环。',
+          CheckStatus.invalid => '当前状态矛盾：${_checkMessage(result.messageKey)}',
+          CheckStatus.incomplete => '还没有完成；可以继续推理或使用提示。',
+        };
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = '检查失败：$error';
+      });
+    }
   }
 
   void _undo() {
@@ -194,7 +387,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       }
       _highlights = _targetsFor(_steps[index]);
       _selectedStepIndex = index;
-      _status = '已回放（共 $actionCount 个确定操作）：${_explanationFor(_steps[index])}';
+      _status = '步骤 $actionCount：${_explanationFor(_steps[index])}';
     });
     _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
       if (!mounted) {
@@ -212,6 +405,8 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   @override
   void dispose() {
     _cancelHighlightFlash();
+    _rowsController.dispose();
+    _columnsController.dispose();
     super.dispose();
   }
 
@@ -221,6 +416,8 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       puzzle: _puzzle,
       state: _session.state,
       highlights: _highlights,
+      editingClues: _editingClues,
+      onCellTap: _editClue,
       onGesture: _handleGesture,
     );
     return Scaffold(
@@ -228,7 +425,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         title: const Text('PuzzleSolver'),
         actions: [
           TextButton.icon(
-            onPressed: _newPuzzle,
+            onPressed: _isBusy ? null : () => unawaited(_newPuzzle()),
             icon: const Icon(Icons.refresh),
             label: const Text('新题'),
           ),
@@ -258,14 +455,20 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
             onHint: _showHint,
             onSolve: _solve,
             onCheck: _check,
-            boardSize: _boardSize,
+            editingClues: _editingClues,
+            rowsController: _rowsController,
+            columnsController: _columnsController,
             difficulty: _difficulty,
             includeBlankCells: _includeBlankCells,
-            onBoardSizeChanged: (value) => setState(() => _boardSize = value),
+            onRowsChanged: (value) => _updateDimension(value, rows: true),
+            onColumnsChanged: (value) => _updateDimension(value, rows: false),
             onDifficultyChanged: (value) => setState(() => _difficulty = value),
             onIncludeBlankCellsChanged: (value) =>
                 setState(() => _includeBlankCells = value),
-            onGenerate: _newPuzzle,
+            onGenerate: () => unawaited(_newPuzzle()),
+            onManualEntry: _startManualEntry,
+            onFinishManualEntry: _finishManualEntry,
+            isBusy: _isBusy,
             status: _status,
           );
           if (constraints.maxWidth < 920) {
@@ -291,39 +494,34 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     );
   }
 
-  String _explanationFor(
-    SolveStep<SlitherlinkAction> step,
-  ) => switch (step.ruleId) {
-    'slitherlink.clueReached' =>
-      '高亮数字周围已经画了 ${step.arguments['lines']} 条线，刚好满足它的要求；'
-          '标亮的 ${step.actions.length} 条边都不能再画线。',
-    'slitherlink.remainingEdgesRequired' =>
-      '高亮数字还差 '
-          '${(step.arguments['clue'] as int) - (step.arguments['lines'] as int)} 条线，'
-          '而周围正好只剩 ${step.actions.length} 条可选边；标亮的边都必须画线。',
-    'slitherlink.vertexDegree' => _vertexExplanation(step),
-    'slitherlink.preventOpenEnd' =>
-      '高亮交点已有一条线，并且只剩一个可连接的方向；'
-          '为了不让线在这里断头，标亮边必须画线。',
-    'slitherlink.assumptionContradiction' =>
-      '尝试让标亮边${_edgeStateName(step.arguments['assumed'])}会让题目无解；'
-          '因此它只能${_edgeStateName(step.arguments['result'])}。',
-    _ => '已应用一条规则。',
-  };
-
-  String _vertexExplanation(SolveStep<SlitherlinkAction> step) {
-    if (step.arguments['lines'] == 2) {
-      return '高亮交点已经连接两条线；为了不出现分叉，'
-          '其余 ${step.actions.length} 条边都不能画线。';
-    }
-    return '高亮交点周围只剩 ${step.actions.length} 条未知边；'
-        '若再画线会留下断头，所以这些边不能画线。';
+  String _explanationFor(SolveStep<SlitherlinkAction> step) {
+    final lineCount = step.actions.where((action) {
+      return action is SetSlitherlinkEdge &&
+          action.state == SlitherlinkEdgeState.line;
+    }).length;
+    final crossCount = step.actions.length - lineCount;
+    final changes = [
+      if (lineCount > 0) '画线 $lineCount',
+      if (crossCount > 0) '打叉 $crossCount',
+    ].join(' · ');
+    return switch (step.ruleId) {
+      'slitherlink.clueReached' => '此格数字已满足 · $changes',
+      'slitherlink.remainingEdgesRequired' => '此格剩余边都要连线 · $changes',
+      'slitherlink.vertexDegree' =>
+        step.arguments['lines'] == 2
+            ? '交点已有两条线，不能再接 · $changes'
+            : '避免交点分叉或断开 · $changes',
+      'slitherlink.preventOpenEnd' => '线经过此交点必须延续 · $changes',
+      'slitherlink.assumptionContradiction' =>
+        '反向尝试无法完成整圈 · 所以${_edgeStateName(step.arguments['result'])} · $changes',
+      _ => changes,
+    };
   }
 
   String _edgeStateName(Object? value) => switch (value) {
     'line' => '画线',
-    'crossed' => '不画线',
-    _ => '保持原状',
+    'crossed' => '打叉',
+    _ => '维持原状',
   };
 
   List<PuzzleTarget> _targetsFor(SolveStep<SlitherlinkAction> step) => [
@@ -341,13 +539,19 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   };
 }
 
+final class _ClueEditResult {
+  const _ClueEditResult(this.value);
+
+  final int? value;
+}
+
 String _stepTitle(SolveStep<SlitherlinkAction> step) => switch (step.ruleId) {
-  'slitherlink.clueReached' => '数字已满足',
-  'slitherlink.remainingEdgesRequired' => '剩余边必须画线',
-  'slitherlink.vertexDegree' => '交点不能分叉',
-  'slitherlink.preventOpenEnd' => '避免线条断头',
-  'slitherlink.assumptionContradiction' => '反证确定边状态',
-  _ => '推理步骤',
+  'slitherlink.clueReached' => '数字满足',
+  'slitherlink.remainingEdgesRequired' => '必须画线',
+  'slitherlink.vertexDegree' => '交点规则',
+  'slitherlink.preventOpenEnd' => '避免断线',
+  'slitherlink.assumptionContradiction' => '排除一边',
+  _ => '推理',
 };
 
 class _Sidebar extends StatelessWidget {
@@ -411,7 +615,7 @@ class _Sidebar extends StatelessWidget {
                     title: Text(_stepTitle(steps[index])),
                     subtitle: Text(
                       descriptionFor(steps[index]),
-                      maxLines: 3,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                     onTap: () => onStepTap(index),
@@ -428,30 +632,42 @@ class _Controls extends StatelessWidget {
     required this.onHint,
     required this.onSolve,
     required this.onCheck,
-    required this.boardSize,
+    required this.editingClues,
+    required this.rowsController,
+    required this.columnsController,
     required this.difficulty,
     required this.includeBlankCells,
-    required this.onBoardSizeChanged,
+    required this.onRowsChanged,
+    required this.onColumnsChanged,
     required this.onDifficultyChanged,
     required this.onIncludeBlankCellsChanged,
     required this.onGenerate,
+    required this.onManualEntry,
+    required this.onFinishManualEntry,
+    required this.isBusy,
     required this.status,
   });
 
   final VoidCallback onHint;
   final VoidCallback onSolve;
   final VoidCallback onCheck;
-  final int boardSize;
+  final bool editingClues;
+  final TextEditingController rowsController;
+  final TextEditingController columnsController;
   final PuzzleDifficulty difficulty;
   final bool includeBlankCells;
-  final ValueChanged<int> onBoardSizeChanged;
+  final ValueChanged<String> onRowsChanged;
+  final ValueChanged<String> onColumnsChanged;
   final ValueChanged<PuzzleDifficulty> onDifficultyChanged;
   final ValueChanged<bool> onIncludeBlankCellsChanged;
   final VoidCallback onGenerate;
+  final VoidCallback onManualEntry;
+  final VoidCallback onFinishManualEntry;
+  final bool isBusy;
   final String status;
 
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -462,22 +678,37 @@ class _Controls extends StatelessWidget {
         const SizedBox(height: 22),
         Text('新题设置', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: boardSize,
-          decoration: const InputDecoration(
-            labelText: '棋盘大小',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-          items: const [
-            DropdownMenuItem(value: 4, child: Text('4 × 4')),
-            DropdownMenuItem(value: 5, child: Text('5 × 5')),
-            DropdownMenuItem(value: 6, child: Text('6 × 6')),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: rowsController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '高（行）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: onRowsChanged,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: columnsController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '宽（列）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: onColumnsChanged,
+              ),
+            ),
           ],
-          onChanged: (value) {
-            if (value != null) onBoardSizeChanged(value);
-          },
         ),
+        const SizedBox(height: 6),
+        const Text('自定义尺寸；最多 100 格，尺寸越大生成越慢。'),
         const SizedBox(height: 12),
         const Text('难度'),
         const SizedBox(height: 6),
@@ -501,25 +732,43 @@ class _Controls extends StatelessWidget {
           onChanged: onIncludeBlankCellsChanged,
         ),
         FilledButton.icon(
-          onPressed: onGenerate,
-          icon: const Icon(Icons.casino_outlined),
-          label: const Text('按此设置生成新题'),
+          onPressed: isBusy ? null : onGenerate,
+          icon: isBusy
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.casino_outlined),
+          label: Text(isBusy ? 'Pi 正在处理…' : '按此设置生成新题'),
         ),
+        const SizedBox(height: 8),
+        if (editingClues)
+          OutlinedButton.icon(
+            onPressed: isBusy ? null : onFinishManualEntry,
+            icon: const Icon(Icons.check),
+            label: const Text('完成录入'),
+          )
+        else
+          OutlinedButton.icon(
+            onPressed: isBusy ? null : onManualEntry,
+            icon: const Icon(Icons.edit_note),
+            label: const Text('录入已有题目'),
+          ),
         const Divider(height: 32),
         FilledButton.icon(
-          onPressed: onHint,
+          onPressed: editingClues || isBusy ? null : onHint,
           icon: const Icon(Icons.lightbulb_outline),
           label: const Text('提示'),
         ),
         const SizedBox(height: 10),
         FilledButton.icon(
-          onPressed: onSolve,
+          onPressed: editingClues || isBusy ? null : onSolve,
           icon: const Icon(Icons.auto_fix_high),
           label: const Text('自动解题'),
         ),
         const SizedBox(height: 10),
         OutlinedButton.icon(
-          onPressed: onCheck,
+          onPressed: editingClues || isBusy ? null : onCheck,
           icon: const Icon(Icons.fact_check_outlined),
           label: const Text('检查答案'),
         ),
@@ -547,12 +796,16 @@ class _BoardPanel extends StatelessWidget {
     required this.puzzle,
     required this.state,
     required this.highlights,
+    required this.editingClues,
+    required this.onCellTap,
     required this.onGesture,
   });
 
   final SlitherlinkPuzzle puzzle;
   final SlitherlinkState state;
   final List<PuzzleTarget> highlights;
+  final bool editingClues;
+  final ValueChanged<CellId> onCellTap;
   final void Function(PuzzleTarget, PointerGesture) onGesture;
 
   @override
@@ -569,12 +822,18 @@ class _BoardPanel extends StatelessWidget {
             );
             return GestureDetector(
               onTapUp: (details) {
+                if (editingClues) {
+                  final cell = geometry.hitCell(details.localPosition);
+                  if (cell != null) onCellTap(cell);
+                  return;
+                }
                 final edge = geometry.hitEdge(details.localPosition);
                 if (edge != null) {
                   onGesture(EdgeTarget(edge), PointerGesture.primaryTap);
                 }
               },
               onSecondaryTapUp: (details) {
+                if (editingClues) return;
                 final edge = geometry.hitEdge(details.localPosition);
                 if (edge != null) {
                   onGesture(EdgeTarget(edge), PointerGesture.secondaryTap);
@@ -617,6 +876,14 @@ class _BoardGeometry {
 
   Offset cellCenter(CellId id) =>
       origin + Offset((id.column + .5) * cellSize, (id.row + .5) * cellSize);
+
+  CellId? hitCell(Offset point) {
+    final relative = point - origin;
+    final column = (relative.dx / cellSize).floor();
+    final row = (relative.dy / cellSize).floor();
+    final cell = CellId(row, column);
+    return topology.containsCell(cell) ? cell : null;
+  }
 
   EdgeId? hitEdge(Offset point) {
     EdgeId? closest;
@@ -789,6 +1056,7 @@ class _SlitherlinkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_SlitherlinkPainter oldDelegate) =>
+      oldDelegate.puzzle != puzzle ||
       oldDelegate.state != state ||
       oldDelegate.highlights != highlights ||
       oldDelegate.geometry.size != geometry.size;

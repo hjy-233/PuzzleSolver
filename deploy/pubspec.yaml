@@ -1,0 +1,10 @@
+name: puzzle_solver_server
+description: PuzzleSolver API and Flutter web static file server.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  puzzle_core:
+    path: ../packages/puzzle_core
