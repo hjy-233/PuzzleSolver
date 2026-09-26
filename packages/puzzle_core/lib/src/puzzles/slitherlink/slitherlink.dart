@@ -122,20 +122,11 @@ final class SlitherlinkPuzzle {
         return const CheckResult(CheckStatus.incomplete);
       }
     }
-    if (topology.allEdges.any(
-      (edge) => state.stateOf(edge) == SlitherlinkEdgeState.empty,
-    )) {
-      return const CheckResult(CheckStatus.incomplete);
-    }
-
     final lineEdges = topology.allEdges
         .where((edge) => state.stateOf(edge) == SlitherlinkEdgeState.line)
         .toSet();
     if (lineEdges.isEmpty) {
-      return const CheckResult(
-        CheckStatus.invalid,
-        messageKey: 'slitherlink.noLoop',
-      );
+      return const CheckResult(CheckStatus.incomplete);
     }
     final vertices = <VertexId, List<EdgeId>>{};
     for (final edge in lineEdges) {
@@ -143,11 +134,14 @@ final class SlitherlinkPuzzle {
         vertices.putIfAbsent(vertex, () => []).add(edge);
       }
     }
-    if (vertices.values.any((edges) => edges.length != 2)) {
+    if (vertices.values.any((edges) => edges.length > 2)) {
       return const CheckResult(
         CheckStatus.invalid,
         messageKey: 'slitherlink.openOrBranchingLine',
       );
+    }
+    if (vertices.values.any((edges) => edges.length != 2)) {
+      return const CheckResult(CheckStatus.incomplete);
     }
     if (!_isSingleLoop(lineEdges, vertices)) {
       return const CheckResult(
