@@ -1,5 +1,7 @@
 FROM ghcr.io/cirruslabs/flutter:stable AS build
 
+ENV FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+
 WORKDIR /workspace
 
 COPY packages/puzzle_core/pubspec.yaml packages/puzzle_core/pubspec.lock ./packages/puzzle_core/
