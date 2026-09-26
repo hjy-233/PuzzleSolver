@@ -216,4 +216,21 @@ void main() {
     expect(normal.solveResult.hasUniqueSolution, isTrue);
     expect(hard.solveResult.hasUniqueSolution, isTrue);
   });
+
+  test('small custom boards still generate a valid hard puzzle', () {
+    final generated = const SlitherlinkGenerator().generate(
+      const SlitherlinkGenerationOptions(
+        rows: 3,
+        columns: 3,
+        difficulty: PuzzleDifficulty.hard,
+        seed: 7,
+      ),
+    );
+
+    expect(generated.solveResult.hasUniqueSolution, isTrue);
+    expect(
+      generated.puzzle.check(generated.solveResult.state).status,
+      CheckStatus.solved,
+    );
+  });
 }

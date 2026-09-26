@@ -90,7 +90,12 @@ final class SlitherlinkGenerator
         columns: options.columns,
       );
       final cells = _randomLoopCells(topology, random, options.difficulty);
-      if (_isRectangle(cells)) continue;
+      final hasRoomForIrregularShape = options.rows > 1 && options.columns > 1;
+      if (hasRoomForIrregularShape &&
+          attempt < attemptLimit - 1 &&
+          _isRectangle(cells)) {
+        continue;
+      }
       final solution = _loopAroundCells(topology: topology, cells: cells);
       final fullClues = <CellId, int>{
         for (var row = 0; row < options.rows; row++)
@@ -121,9 +126,9 @@ final class SlitherlinkGenerator
                 rows: options.rows,
                 columns: options.columns,
               ),
-            )
+            ) ??
+              fullClues
           : fullClues;
-      if (clues == null) continue;
       final puzzle = SlitherlinkPuzzle(topology: topology, clues: clues);
       final result = clues.length == fullClues.length
           ? fullResult
@@ -156,7 +161,8 @@ final class SlitherlinkGenerator
     final cells = <CellId>{
       CellId(random.nextInt(topology.rows), random.nextInt(topology.columns)),
     };
-    final maximumSize = (topology.rows * topology.columns).clamp(8, 15);
+    final area = topology.rows * topology.columns;
+    final maximumSize = min(area, area.clamp(8, 15));
     final range = switch (difficulty) {
       PuzzleDifficulty.easy => (4, (maximumSize * .55).round()),
       PuzzleDifficulty.normal => (7, (maximumSize * .75).round()),
@@ -240,6 +246,7 @@ final class SlitherlinkGenerator
     required int rows,
     required int columns,
   }) {
+    if (fullClueCount <= 1) return fullClueCount;
     final preferred = switch (options.difficulty) {
       PuzzleDifficulty.easy => (fullClueCount * .68).ceil(),
       PuzzleDifficulty.normal => (fullClueCount * .42).ceil(),
