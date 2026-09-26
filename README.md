@@ -33,8 +33,9 @@ the shared layer does not accidentally become specific to line-drawing puzzles.
 ## Deployment
 
 `project-deployer.json` deploys the Flutter Web player to a 64-bit Raspberry
-Pi through ProjectDeployer. It builds an ARM64 image from `Dockerfile`, serves
-the generated web files through nginx, and exposes the app on port `18082`.
+ Pi through ProjectDeployer. It builds an ARM64 image from `Dockerfile`, serves
+the generated web files through a small Dart static HTTP server, and exposes
+the app on port `18082`.
 
 The deployment manifest keeps the runtime stateless: no volumes or secrets
 are required for the current local-only puzzle player.

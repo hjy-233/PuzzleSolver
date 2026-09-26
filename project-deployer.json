@@ -7,9 +7,8 @@
     "context": "."
   },
   "command": [
-    "nginx",
-    "-g",
-    "daemon off;"
+    "dart",
+    "/app/server.dart"
   ],
   "environment": [],
   "ports": [
