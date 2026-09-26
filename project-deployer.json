@@ -8,7 +8,7 @@
   },
   "command": [
     "dart",
-    "/app/server.dart"
+    "/app/deploy/server.dart"
   ],
   "environment": [],
   "ports": [
