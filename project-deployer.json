@@ -29,7 +29,7 @@
   },
   "resources": {
     "memoryMiB": 256,
-    "cpuPercent": 50
+    "cpuPercent": 100
   },
   "restartPolicy": "unless-stopped"
 }
