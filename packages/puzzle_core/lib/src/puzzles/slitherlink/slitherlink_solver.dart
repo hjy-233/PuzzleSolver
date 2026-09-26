@@ -80,15 +80,22 @@ final class SlitherlinkGenerator
     final random = Random(options.seed);
     final solver = const SlitherlinkSolver();
     final area = options.rows * options.columns;
+    final quickGeneration = !options.includeSolveSteps;
     final uniquenessSolver = SlitherlinkSolver(
-      maxSearchNodes: area >= 64
+      maxSearchNodes: quickGeneration
+          ? area >= 64
+                ? 800
+                : 5000
+          : area >= 64
           ? 2000
           : area >= 36
           ? 8000
           : 200000,
     );
-    final attemptLimit = area >= 64
-        ? 3
+    final attemptLimit = quickGeneration
+        ? area >= 64
+              ? 2
+              : 3
         : switch (options.difficulty) {
             PuzzleDifficulty.easy => 1,
             PuzzleDifficulty.normal => 4,
@@ -142,6 +149,11 @@ final class SlitherlinkGenerator
                   fullClues: fullClues,
                   random: random,
                   solver: uniquenessSolver,
+                  maximumChecks: quickGeneration
+                      ? area >= 64
+                            ? 8
+                            : 12
+                      : null,
                   minimumClueCount: _minimumClueCount(
                     options,
                     fullClueCount: fullClues.length,
@@ -244,18 +256,19 @@ final class SlitherlinkGenerator
     required Map<CellId, int> fullClues,
     required Random random,
     required SlitherlinkSolver solver,
+    required int? maximumChecks,
     required int minimumClueCount,
   }) {
     final clues = Map<CellId, int>.from(fullClues);
     final order = fullClues.keys.toList()..shuffle(random);
     var cursor = 0;
     var batchSize = max(1, ((clues.length - minimumClueCount) / 12).ceil());
-    final maximumChecks = topology.rows * topology.columns >= 64
-        ? 16
-        : order.length * 2;
+    final checkLimit =
+        maximumChecks ??
+        (topology.rows * topology.columns >= 64 ? 16 : order.length * 2);
     var checks = 0;
     while (cursor < order.length && clues.length > minimumClueCount) {
-      if (checks >= maximumChecks) break;
+      if (checks >= checkLimit) break;
       final batch = order
           .skip(cursor)
           .where(clues.containsKey)
