@@ -198,6 +198,36 @@ void main() {
     expect(const SlitherlinkSolver().countSolutions(generated.puzzle), 1);
   });
 
+  test('fast generation keeps normal and hard tiers meaningfully distinct', () {
+    const generator = SlitherlinkGenerator();
+    GeneratedSlitherlinkPuzzle generate(PuzzleDifficulty difficulty) =>
+        generator.generate(
+          SlitherlinkGenerationOptions(
+            rows: 5,
+            columns: 5,
+            difficulty: difficulty,
+            includeSolveSteps: false,
+            seed: 23,
+          ),
+        );
+
+    final easy = generate(PuzzleDifficulty.easy);
+    final normal = generate(PuzzleDifficulty.normal);
+    final hard = generate(PuzzleDifficulty.hard);
+
+    expect(
+      easy.puzzle.clues.length - normal.puzzle.clues.length,
+      greaterThanOrEqualTo(4),
+    );
+    expect(
+      normal.puzzle.clues.length - hard.puzzle.clues.length,
+      greaterThanOrEqualTo(2),
+    );
+    for (final puzzle in [easy, normal, hard]) {
+      expect(const SlitherlinkSolver().countSolutions(puzzle.puzzle), 1);
+    }
+  });
+
   test('difficulty tiers produce increasing reasoning demands', () {
     final generator = const SlitherlinkGenerator();
     final easy = generator.generate(
@@ -227,6 +257,14 @@ void main() {
 
     expect(easy.puzzle.clues.length, greaterThan(normal.puzzle.clues.length));
     expect(normal.puzzle.clues.length, greaterThan(hard.puzzle.clues.length));
+    expect(
+      _countAssumptions(normal) - _countAssumptions(easy),
+      greaterThanOrEqualTo(2),
+    );
+    expect(
+      _countAssumptions(hard) - _countAssumptions(normal),
+      greaterThanOrEqualTo(2),
+    );
     expect(easy.solveResult.hasUniqueSolution, isTrue);
     expect(normal.solveResult.hasUniqueSolution, isTrue);
     expect(hard.solveResult.hasUniqueSolution, isTrue);
@@ -249,3 +287,9 @@ void main() {
     );
   });
 }
+
+int _countAssumptions(GeneratedSlitherlinkPuzzle generated) => generated
+    .solveResult
+    .steps
+    .where((step) => step.ruleId == 'slitherlink.assumptionContradiction')
+    .length;

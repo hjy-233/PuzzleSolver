@@ -93,13 +93,18 @@ final class SlitherlinkGenerator
           : 200000,
     );
     final attemptLimit = quickGeneration
-        ? area >= 64
-              ? 2
-              : 3
+        ? switch ((area >= 64, options.difficulty)) {
+            (true, PuzzleDifficulty.easy) => 2,
+            (true, PuzzleDifficulty.normal) => 3,
+            (true, PuzzleDifficulty.hard) => 3,
+            (false, PuzzleDifficulty.easy) => 1,
+            (false, PuzzleDifficulty.normal) => 6,
+            (false, PuzzleDifficulty.hard) => 8,
+          }
         : switch (options.difficulty) {
             PuzzleDifficulty.easy => 1,
-            PuzzleDifficulty.normal => 4,
-            PuzzleDifficulty.hard => 8,
+            PuzzleDifficulty.normal => 8,
+            PuzzleDifficulty.hard => 16,
           };
     GeneratedSlitherlinkPuzzle? bestCandidate;
     var bestDifficultyDistance = double.infinity;
@@ -150,9 +155,14 @@ final class SlitherlinkGenerator
                   random: random,
                   solver: uniquenessSolver,
                   maximumChecks: quickGeneration
-                      ? area >= 64
-                            ? 8
-                            : 12
+                      ? switch ((area >= 64, options.difficulty)) {
+                          (true, PuzzleDifficulty.easy) => 8,
+                          (true, PuzzleDifficulty.normal) => 32,
+                          (true, PuzzleDifficulty.hard) => 24,
+                          (false, PuzzleDifficulty.easy) => 12,
+                          (false, PuzzleDifficulty.normal) => 36,
+                          (false, PuzzleDifficulty.hard) => 60,
+                        }
                       : null,
                   minimumClueCount: _minimumClueCount(
                     options,
@@ -180,7 +190,7 @@ final class SlitherlinkGenerator
           bestCandidate = candidate;
           bestDifficultyDistance = difficultyDistance;
         }
-        if (difficultyDistance < .2) return candidate;
+        if (!quickGeneration && difficultyDistance < .2) return candidate;
       }
     }
     if (bestCandidate != null) return bestCandidate;
@@ -198,7 +208,10 @@ final class SlitherlinkGenerator
       CellId(random.nextInt(topology.rows), random.nextInt(topology.columns)),
     };
     final area = topology.rows * topology.columns;
-    final maximumSize = min(area, area.clamp(8, 15));
+    final maximumSize = min(
+      area,
+      area < 36 ? area.clamp(8, 15).toInt() : max(15, (area * .4).round()),
+    );
     final range = switch (difficulty) {
       PuzzleDifficulty.easy => (4, (maximumSize * .55).round()),
       PuzzleDifficulty.normal => (7, (maximumSize * .75).round()),
@@ -343,8 +356,8 @@ final class SlitherlinkGenerator
     };
     final targetSearchSteps = switch (options.difficulty) {
       PuzzleDifficulty.easy => 0,
-      PuzzleDifficulty.normal => 2,
-      PuzzleDifficulty.hard => 5,
+      PuzzleDifficulty.normal => 5,
+      PuzzleDifficulty.hard => 12,
     };
     final expectedSteps = candidate.puzzle.topology.allEdges.length * .45;
     final stepRatio = candidate.solveResult.steps.length / expectedSteps;
@@ -355,8 +368,8 @@ final class SlitherlinkGenerator
     };
     final minimumSearchSteps = switch (options.difficulty) {
       PuzzleDifficulty.easy => 0,
-      PuzzleDifficulty.normal => 1,
-      PuzzleDifficulty.hard => 3,
+      PuzzleDifficulty.normal => 2,
+      PuzzleDifficulty.hard => 7,
     };
     final searchPenalty = searchSteps < minimumSearchSteps
         ? (minimumSearchSteps - searchSteps) * 2.0
