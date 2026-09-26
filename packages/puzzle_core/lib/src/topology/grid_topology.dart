@@ -149,6 +149,18 @@ final class GridTopology {
     };
   }
 
+  List<EdgeId> edgesAt(VertexId vertex) {
+    if (!containsVertex(vertex)) {
+      throw ArgumentError.value(vertex, 'vertex', 'Outside this grid');
+    }
+    return [
+      if (vertex.column > 0) EdgeId.horizontal(vertex.row, vertex.column - 1),
+      if (vertex.column < columns) EdgeId.horizontal(vertex.row, vertex.column),
+      if (vertex.row > 0) EdgeId.vertical(vertex.row - 1, vertex.column),
+      if (vertex.row < rows) EdgeId.vertical(vertex.row, vertex.column),
+    ];
+  }
+
   void _requireCell(CellId cell) {
     if (!containsCell(cell)) {
       throw ArgumentError.value(cell, 'cell', 'Outside this grid');

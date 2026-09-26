@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "projectId": "puzzle-solver",
+  "platform": "linux/arm64",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "command": [
+    "nginx",
+    "-g",
+    "daemon off;"
+  ],
+  "environment": [],
+  "ports": [
+    {
+      "container": 8080,
+      "host": 18082,
+      "protocol": "tcp"
+    }
+  ],
+  "volumes": [],
+  "healthCheck": {
+    "type": "http",
+    "path": "/",
+    "port": 8080,
+    "timeoutSeconds": 3,
+    "startPeriodSeconds": 10,
+    "retries": 5
+  },
+  "resources": {
+    "memoryMiB": 256,
+    "cpuPercent": 50
+  },
+  "restartPolicy": "unless-stopped"
+}
