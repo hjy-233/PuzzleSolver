@@ -11,6 +11,8 @@ final class SlitherlinkState {
 
   final Map<EdgeId, SlitherlinkEdgeState> _edges;
 
+  Map<EdgeId, SlitherlinkEdgeState> get edges => _edges;
+
   SlitherlinkEdgeState stateOf(EdgeId edge) =>
       _edges[edge] ?? SlitherlinkEdgeState.empty;
 

@@ -77,7 +77,14 @@ final class SlitherlinkGenerator
     }
     final random = Random(options.seed);
     final solver = const SlitherlinkSolver();
-    for (var attempt = 0; attempt < 64; attempt++) {
+    final attemptLimit = switch (options.difficulty) {
+      PuzzleDifficulty.easy => 1,
+      PuzzleDifficulty.normal => 4,
+      PuzzleDifficulty.hard => 8,
+    };
+    GeneratedSlitherlinkPuzzle? bestCandidate;
+    var bestDifficultyDistance = double.infinity;
+    for (var attempt = 0; attempt < attemptLimit; attempt++) {
       final topology = GridTopology(
         rows: options.rows,
         columns: options.columns,
@@ -108,7 +115,12 @@ final class SlitherlinkGenerator
               fullClues: fullClues,
               random: random,
               solver: solver,
-              minimumClueCount: _minimumClueCount(options, fullClues.length),
+              minimumClueCount: _minimumClueCount(
+                options,
+                fullClueCount: fullClues.length,
+                rows: options.rows,
+                columns: options.columns,
+              ),
             )
           : fullClues;
       if (clues == null) continue;
@@ -117,13 +129,20 @@ final class SlitherlinkGenerator
           ? fullResult
           : solver.solve(puzzle);
       if (result.hasUniqueSolution) {
-        return GeneratedSlitherlinkPuzzle(
+        final candidate = GeneratedSlitherlinkPuzzle(
           puzzle: puzzle,
           solution: solution,
           solveResult: result,
         );
+        final difficultyDistance = _difficultyDistance(candidate, options);
+        if (difficultyDistance < bestDifficultyDistance) {
+          bestCandidate = candidate;
+          bestDifficultyDistance = difficultyDistance;
+        }
+        if (difficultyDistance < .2) return candidate;
       }
     }
+    if (bestCandidate != null) return bestCandidate;
     throw StateError(
       'Could not generate a unique irregular Slitherlink puzzle.',
     );
@@ -216,15 +235,63 @@ final class SlitherlinkGenerator
   }
 
   int _minimumClueCount(
-    SlitherlinkGenerationOptions options,
-    int fullClueCount,
-  ) {
+    SlitherlinkGenerationOptions options, {
+    required int fullClueCount,
+    required int rows,
+    required int columns,
+  }) {
     final preferred = switch (options.difficulty) {
-      PuzzleDifficulty.easy => (fullClueCount * .64).ceil(),
-      PuzzleDifficulty.normal => (fullClueCount * .40).ceil(),
-      PuzzleDifficulty.hard => (fullClueCount * .28).ceil(),
+      PuzzleDifficulty.easy => (fullClueCount * .68).ceil(),
+      PuzzleDifficulty.normal => (fullClueCount * .42).ceil(),
+      PuzzleDifficulty.hard => (fullClueCount * .25).ceil(),
     };
-    return preferred.clamp(1, fullClueCount - 1);
+    final area = rows * columns;
+    final scaleFloor = switch (options.difficulty) {
+      PuzzleDifficulty.easy => (area * .28).ceil(),
+      PuzzleDifficulty.normal => (area * .20).ceil(),
+      PuzzleDifficulty.hard => (area * .13).ceil(),
+    };
+    return max(1, max(preferred, scaleFloor)).clamp(1, fullClueCount - 1);
+  }
+
+  double _difficultyDistance(
+    GeneratedSlitherlinkPuzzle candidate,
+    SlitherlinkGenerationOptions options,
+  ) {
+    final topology = candidate.puzzle.topology;
+    final clueRatio =
+        candidate.puzzle.clues.length / (topology.rows * topology.columns);
+    final searchSteps = candidate.solveResult.steps
+        .where((step) => step.ruleId == 'slitherlink.assumptionContradiction')
+        .length;
+    final targetClueRatio = switch (options.difficulty) {
+      PuzzleDifficulty.easy => .68,
+      PuzzleDifficulty.normal => .47,
+      PuzzleDifficulty.hard => .32,
+    };
+    final targetSearchSteps = switch (options.difficulty) {
+      PuzzleDifficulty.easy => 0,
+      PuzzleDifficulty.normal => 2,
+      PuzzleDifficulty.hard => 5,
+    };
+    final expectedSteps = candidate.puzzle.topology.allEdges.length * .45;
+    final stepRatio = candidate.solveResult.steps.length / expectedSteps;
+    final targetStepRatio = switch (options.difficulty) {
+      PuzzleDifficulty.easy => .65,
+      PuzzleDifficulty.normal => 1.15,
+      PuzzleDifficulty.hard => 1.8,
+    };
+    final minimumSearchSteps = switch (options.difficulty) {
+      PuzzleDifficulty.easy => 0,
+      PuzzleDifficulty.normal => 1,
+      PuzzleDifficulty.hard => 3,
+    };
+    final searchPenalty = searchSteps < minimumSearchSteps
+        ? (minimumSearchSteps - searchSteps) * 2.0
+        : (searchSteps - targetSearchSteps).abs() * .22;
+    return (clueRatio - targetClueRatio).abs() * 2 +
+        searchPenalty +
+        (stepRatio - targetStepRatio).abs() * .35;
   }
 }
 
