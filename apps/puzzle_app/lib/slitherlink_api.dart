@@ -11,12 +11,14 @@ final class SlitherlinkApi {
     required int columns,
     required PuzzleDifficulty difficulty,
     required bool includeBlankCells,
+    required double clueDensity,
   }) async {
     final response = await _post('/api/puzzles/slitherlink/generate', {
       'rows': rows,
       'columns': columns,
       'difficulty': difficulty.name,
       'includeBlankCells': includeBlankCells,
+      'clueDensity': clueDensity,
     });
     return _parsePuzzle(response);
   }

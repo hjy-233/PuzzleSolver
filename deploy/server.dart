@@ -147,12 +147,17 @@ Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
     null => PuzzleDifficulty.normal,
     _ => throw const FormatException('Unknown difficulty.'),
   };
+  final rawClueDensity = body['clueDensity'];
+  if (rawClueDensity != null && rawClueDensity is! num) {
+    throw const FormatException('Clue density must be a number.');
+  }
   final generated = const SlitherlinkGenerator().generate(
     SlitherlinkGenerationOptions(
       rows: rows,
       columns: columns,
       difficulty: difficulty,
       includeBlankCells: body['includeBlankCells'] as bool? ?? true,
+      clueDensity: (rawClueDensity as num?)?.toDouble() ?? 0.5,
       includeSolveSteps: false,
     ),
   );
