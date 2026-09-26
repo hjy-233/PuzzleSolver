@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:puzzle_core/puzzle_core.dart';
 
@@ -9,7 +10,15 @@ const rootDirectory = String.fromEnvironment(
   'PUZZLE_WEB_ROOT',
   defaultValue: '/srv/puzzle-solver',
 );
-const port = 8080;
+const port = int.fromEnvironment('PUZZLE_PORT', defaultValue: 8080);
+const _maximumRequestBytes = 64 * 1024;
+const _maximumActiveApiRequests = 4;
+const _maximumHeavyOperations = 1;
+const _maximumRateLimitKeys = 4096;
+
+final _apiRateLimiter = _ApiRateLimiter();
+var _activeApiRequests = 0;
+var _activeHeavyOperations = 0;
 
 Future<void> main() async {
   final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
@@ -80,6 +89,45 @@ Future<void> _serveApi(HttpRequest request) async {
     return;
   }
 
+  final clientAddress = _clientAddress(request);
+  final requestLimit = switch (request.uri.path) {
+    '/api/puzzles/slitherlink/generate' => 4,
+    '/api/puzzles/slitherlink/solve' => 4,
+    '/api/puzzles/slitherlink/check' => 120,
+    _ => 30,
+  };
+  final retryAfter = _apiRateLimiter.retryAfter(
+    clientAddress,
+    request.uri.path,
+    requestLimit,
+  );
+  if (retryAfter != null) {
+    request.response.headers.set(HttpHeaders.retryAfterHeader, '$retryAfter');
+    await _writeJson(request.response, HttpStatus.tooManyRequests, {
+      'error': 'Too many requests. Please retry later.',
+    });
+    return;
+  }
+  if (_activeApiRequests >= _maximumActiveApiRequests) {
+    request.response.headers.set(HttpHeaders.retryAfterHeader, '2');
+    await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+      'error': 'The server is busy. Please retry shortly.',
+    });
+    return;
+  }
+  final isHeavyOperation =
+      request.uri.path == '/api/puzzles/slitherlink/generate' ||
+      request.uri.path == '/api/puzzles/slitherlink/solve';
+  if (isHeavyOperation && _activeHeavyOperations >= _maximumHeavyOperations) {
+    request.response.headers.set(HttpHeaders.retryAfterHeader, '5');
+    await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+      'error': 'A puzzle operation is already running. Please retry shortly.',
+    });
+    return;
+  }
+
+  _activeApiRequests++;
+  if (isHeavyOperation) _activeHeavyOperations++;
   try {
     final body = await _readJsonObject(request);
     final path = request.uri.path;
@@ -91,6 +139,14 @@ Future<void> _serveApi(HttpRequest request) async {
       return;
     }
     await _writeJson(request.response, HttpStatus.ok, payload);
+  } on _PayloadTooLarge {
+    await _writeJson(request.response, 413, {
+      'error': 'Request body must not exceed 64 KiB.',
+    });
+  } on TimeoutException {
+    await _writeJson(request.response, HttpStatus.requestTimeout, {
+      'error': 'Request body was not received in time.',
+    });
   } on FormatException catch (error) {
     await _writeJson(request.response, HttpStatus.badRequest, {
       'error': error.message,
@@ -107,7 +163,21 @@ Future<void> _serveApi(HttpRequest request) async {
     await _writeJson(request.response, HttpStatus.internalServerError, {
       'error': 'Puzzle processing failed: $error',
     });
+  } finally {
+    _activeApiRequests--;
+    if (isHeavyOperation) _activeHeavyOperations--;
   }
+}
+
+String _clientAddress(HttpRequest request) {
+  final forwardedAddress = request.headers.value('cf-connecting-ip')?.trim();
+  final parsedForwardedAddress = forwardedAddress == null
+      ? null
+      : InternetAddress.tryParse(forwardedAddress);
+  if (parsedForwardedAddress != null) {
+    return parsedForwardedAddress.address;
+  }
+  return request.connectionInfo?.remoteAddress.address ?? 'unknown';
 }
 
 Map<String, Object?>? _dispatchApi(String path, Map<String, Object?> body) =>
@@ -124,7 +194,19 @@ bool _isLocalDevelopmentOrigin(String origin) {
 }
 
 Future<Map<String, Object?>> _readJsonObject(HttpRequest request) async {
-  final raw = await utf8.decoder.bind(request).join();
+  if (request.contentLength > _maximumRequestBytes) {
+    throw const _PayloadTooLarge();
+  }
+  final bytes = BytesBuilder(copy: false);
+  await request
+      .fold<void>(null, (previous, chunk) {
+        if (bytes.length + chunk.length > _maximumRequestBytes) {
+          throw const _PayloadTooLarge();
+        }
+        bytes.add(chunk);
+      })
+      .timeout(const Duration(seconds: 5));
+  final raw = utf8.decode(bytes.takeBytes());
   final decoded = jsonDecode(raw);
   if (decoded is! Map<String, dynamic>) {
     throw const FormatException('Request body must be a JSON object.');
@@ -135,7 +217,11 @@ Future<Map<String, Object?>> _readJsonObject(HttpRequest request) async {
 Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
   final rows = _requiredInt(body, 'rows');
   final columns = _requiredInt(body, 'columns');
-  if (rows < 1 || columns < 1 || rows * columns > 100) {
+  if (rows < 1 ||
+      columns < 1 ||
+      rows > 100 ||
+      columns > 100 ||
+      rows * columns > 100) {
     throw const FormatException(
       'Board dimensions must be positive and at most 100 cells.',
     );
@@ -171,7 +257,15 @@ Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
 Map<String, Object?> _solvePuzzle(Map<String, Object?> body) {
   final puzzle = _parsePuzzle(body);
   final state = _parseState(body, puzzle.topology);
-  final result = const SlitherlinkSolver().solve(puzzle, initialState: state);
+  final area = puzzle.topology.rows * puzzle.topology.columns;
+  final maxSearchNodes = area <= 25
+      ? 20000
+      : area <= 64
+      ? 8000
+      : 2500;
+  final result = SlitherlinkSolver(
+    maxSearchNodes: maxSearchNodes,
+  ).solve(puzzle, initialState: state);
   return {
     'solutionCount': result.solutionCount,
     'state': _serializeState(result.state),
@@ -206,7 +300,11 @@ Map<String, Object?> _checkPuzzle(Map<String, Object?> body) {
 SlitherlinkPuzzle _parsePuzzle(Map<String, Object?> body) {
   final rows = _requiredInt(body, 'rows');
   final columns = _requiredInt(body, 'columns');
-  if (rows < 1 || columns < 1 || rows * columns > 100) {
+  if (rows < 1 ||
+      columns < 1 ||
+      rows > 100 ||
+      columns > 100 ||
+      rows * columns > 100) {
     throw const FormatException(
       'Board dimensions must be positive and at most 100 cells.',
     );
@@ -214,6 +312,11 @@ SlitherlinkPuzzle _parsePuzzle(Map<String, Object?> body) {
   final rawClues = body['clues'];
   if (rawClues is! List) {
     throw const FormatException('clues must be an array.');
+  }
+  if (rawClues.length > rows * columns) {
+    throw const FormatException(
+      'clues contains more entries than board cells.',
+    );
   }
   final clues = <CellId, int>{};
   for (final raw in rawClues) {
@@ -235,6 +338,11 @@ SlitherlinkState _parseState(Map<String, Object?> body, GridTopology topology) {
   final rawEdges = body['edges'] ?? const [];
   if (rawEdges is! List) {
     throw const FormatException('edges must be an array.');
+  }
+  if (rawEdges.length > topology.allEdges.length) {
+    throw const FormatException(
+      'edges contains more entries than board edges.',
+    );
   }
   final edges = <EdgeId, SlitherlinkEdgeState>{};
   for (final raw in rawEdges) {
@@ -302,6 +410,54 @@ int _requiredInt(Map<String, Object?> source, String key) {
   final value = source[key];
   if (value is! int) throw FormatException('$key must be an integer.');
   return value;
+}
+
+final class _ApiRateLimiter {
+  final Map<String, _RateWindow> _windows = {};
+
+  int? retryAfter(String clientAddress, String path, int limit) {
+    final now = DateTime.now();
+    if (_windows.length >= _maximumRateLimitKeys) {
+      _windows.removeWhere(
+        (_, window) =>
+            now.difference(window.startedAt) >= const Duration(minutes: 1),
+      );
+    }
+    final routeKey = switch (path) {
+      '/api/puzzles/slitherlink/generate' => 'generate',
+      '/api/puzzles/slitherlink/solve' => 'solve',
+      '/api/puzzles/slitherlink/check' => 'check',
+      _ => 'other',
+    };
+    final key = '$clientAddress:$routeKey';
+    var window = _windows[key];
+    if (window == null) {
+      if (_windows.length >= _maximumRateLimitKeys) return 60;
+      window = _RateWindow(now);
+      _windows[key] = window;
+    } else if (now.difference(window.startedAt) >= const Duration(minutes: 1)) {
+      window
+        ..startedAt = now
+        ..count = 0;
+    }
+    if (window.count >= limit) {
+      final remainingSeconds = 60 - now.difference(window.startedAt).inSeconds;
+      return remainingSeconds < 1 ? 1 : remainingSeconds;
+    }
+    window.count++;
+    return null;
+  }
+}
+
+final class _RateWindow {
+  _RateWindow(this.startedAt);
+
+  DateTime startedAt;
+  int count = 0;
+}
+
+final class _PayloadTooLarge implements Exception {
+  const _PayloadTooLarge();
 }
 
 Future<void> _writeJson(
