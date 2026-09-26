@@ -47,6 +47,7 @@ final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
     required this.columns,
     this.difficulty = PuzzleDifficulty.normal,
     this.includeBlankCells = true,
+    this.includeSolveSteps = true,
     this.seed,
   });
 
@@ -54,6 +55,7 @@ final class SlitherlinkGenerationOptions implements PuzzleGenerationOptions {
   final int columns;
   final PuzzleDifficulty difficulty;
   final bool includeBlankCells;
+  final bool includeSolveSteps;
   final int? seed;
 }
 
@@ -77,11 +79,21 @@ final class SlitherlinkGenerator
     }
     final random = Random(options.seed);
     final solver = const SlitherlinkSolver();
-    final attemptLimit = switch (options.difficulty) {
-      PuzzleDifficulty.easy => 1,
-      PuzzleDifficulty.normal => 4,
-      PuzzleDifficulty.hard => 8,
-    };
+    final area = options.rows * options.columns;
+    final uniquenessSolver = SlitherlinkSolver(
+      maxSearchNodes: area >= 64
+          ? 2000
+          : area >= 36
+          ? 8000
+          : 200000,
+    );
+    final attemptLimit = area >= 64
+        ? 3
+        : switch (options.difficulty) {
+            PuzzleDifficulty.easy => 1,
+            PuzzleDifficulty.normal => 4,
+            PuzzleDifficulty.hard => 8,
+          };
     GeneratedSlitherlinkPuzzle? bestCandidate;
     var bestDifficultyDistance = double.infinity;
     for (var attempt = 0; attempt < attemptLimit; attempt++) {
@@ -112,27 +124,39 @@ final class SlitherlinkGenerator
         clues: fullClues,
       );
       if (fullPuzzle.check(solution).status != CheckStatus.solved) continue;
-      final fullResult = solver.solve(fullPuzzle);
-      if (!fullResult.hasUniqueSolution) continue;
+      late final SlitherlinkSolveResult fullResult;
+      if (options.includeSolveSteps) {
+        fullResult = solver.solve(fullPuzzle);
+        if (!fullResult.hasUniqueSolution) continue;
+      } else {
+        try {
+          if (uniquenessSolver.countSolutions(fullPuzzle) != 1) continue;
+        } on StateError {
+          continue;
+        }
+        fullResult = _knownSolutionResult(solution);
+      }
       final clues = options.includeBlankCells
           ? _removeRedundantClues(
-              topology: topology,
-              fullClues: fullClues,
-              random: random,
-              solver: solver,
-              minimumClueCount: _minimumClueCount(
-                options,
-                fullClueCount: fullClues.length,
-                rows: options.rows,
-                columns: options.columns,
-              ),
-            ) ??
-              fullClues
+                  topology: topology,
+                  fullClues: fullClues,
+                  random: random,
+                  solver: uniquenessSolver,
+                  minimumClueCount: _minimumClueCount(
+                    options,
+                    fullClueCount: fullClues.length,
+                    rows: options.rows,
+                    columns: options.columns,
+                  ),
+                ) ??
+                fullClues
           : fullClues;
       final puzzle = SlitherlinkPuzzle(topology: topology, clues: clues);
       final result = clues.length == fullClues.length
           ? fullResult
-          : solver.solve(puzzle);
+          : options.includeSolveSteps
+          ? solver.solve(puzzle)
+          : _knownSolutionResult(solution);
       if (result.hasUniqueSolution) {
         final candidate = GeneratedSlitherlinkPuzzle(
           puzzle: puzzle,
@@ -224,21 +248,49 @@ final class SlitherlinkGenerator
   }) {
     final clues = Map<CellId, int>.from(fullClues);
     final order = fullClues.keys.toList()..shuffle(random);
-    for (final cell in order) {
-      if (clues.length <= minimumClueCount) break;
-      final clue = clues.remove(cell);
-      if (clue == null) continue;
+    var cursor = 0;
+    var batchSize = max(1, ((clues.length - minimumClueCount) / 12).ceil());
+    final maximumChecks = topology.rows * topology.columns >= 64
+        ? 16
+        : order.length * 2;
+    var checks = 0;
+    while (cursor < order.length && clues.length > minimumClueCount) {
+      if (checks >= maximumChecks) break;
+      final batch = order
+          .skip(cursor)
+          .where(clues.containsKey)
+          .take(min(batchSize, clues.length - minimumClueCount))
+          .toList();
+      if (batch.isEmpty) break;
+      final removed = <CellId, int>{
+        for (final cell in batch) cell: clues.remove(cell)!,
+      };
       final candidate = SlitherlinkPuzzle(topology: topology, clues: clues);
+      checks++;
       try {
-        if (!solver.solve(candidate).hasUniqueSolution) {
-          clues[cell] = clue;
+        if (solver.countSolutions(candidate) == 1) {
+          cursor += batch.length;
+          continue;
         }
       } on StateError {
-        clues[cell] = clue;
+        // Keep the known-unique clues when proving a sparser set is costly.
+      }
+      clues.addAll(removed);
+      if (batchSize > 1) {
+        batchSize = max(1, batchSize ~/ 2);
+      } else {
+        cursor += batch.length;
       }
     }
     return clues.length < fullClues.length ? clues : null;
   }
+
+  SlitherlinkSolveResult _knownSolutionResult(SlitherlinkState solution) =>
+      SlitherlinkSolveResult(
+        state: solution,
+        steps: const [],
+        solutionCount: 1,
+      );
 
   int _minimumClueCount(
     SlitherlinkGenerationOptions options, {
@@ -308,6 +360,23 @@ final class SlitherlinkSolver {
   const SlitherlinkSolver({this.maxSearchNodes = 200000});
 
   final int maxSearchNodes;
+
+  /// Counts up to [limit] valid completions without building explanation steps.
+  int countSolutions(
+    SlitherlinkPuzzle puzzle, {
+    SlitherlinkState? initialState,
+    int limit = 2,
+  }) {
+    if (limit < 1) {
+      throw ArgumentError.value(limit, 'limit', 'Must be positive.');
+    }
+    return _countSolutions(
+      puzzle,
+      initialState ?? puzzle.initialState,
+      _SearchBudget(maxSearchNodes),
+      limit,
+    );
+  }
 
   SlitherlinkSolveResult solve(
     SlitherlinkPuzzle puzzle, {
@@ -560,10 +629,43 @@ final class SlitherlinkSolver {
   }
 
   EdgeId? _nextUndecidedEdge(SlitherlinkPuzzle puzzle, SlitherlinkState state) {
-    for (final edge in puzzle.topology.allEdges) {
-      if (state.stateOf(edge) == SlitherlinkEdgeState.empty) return edge;
+    final scores = <EdgeId, int>{};
+    void addConstraint(List<EdgeId> edges) {
+      var lines = 0;
+      final empty = <EdgeId>[];
+      for (final edge in edges) {
+        switch (state.stateOf(edge)) {
+          case SlitherlinkEdgeState.line:
+            lines++;
+          case SlitherlinkEdgeState.empty:
+            empty.add(edge);
+          case SlitherlinkEdgeState.crossed:
+            break;
+        }
+      }
+      final weight = 4 - empty.length + lines;
+      for (final edge in empty) {
+        scores.update(edge, (score) => score + weight, ifAbsent: () => weight);
+      }
     }
-    return null;
+
+    for (final cell in puzzle.clues.keys) {
+      addConstraint(puzzle.topology.edgesAround(cell));
+    }
+    for (var row = 0; row <= puzzle.topology.rows; row++) {
+      for (var column = 0; column <= puzzle.topology.columns; column++) {
+        addConstraint(puzzle.topology.edgesAt(VertexId(row, column)));
+      }
+    }
+    EdgeId? selected;
+    var highestScore = -1;
+    for (final entry in scores.entries) {
+      if (entry.value > highestScore) {
+        selected = entry.key;
+        highestScore = entry.value;
+      }
+    }
+    return selected;
   }
 }
 

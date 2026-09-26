@@ -153,6 +153,7 @@ Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
       columns: columns,
       difficulty: difficulty,
       includeBlankCells: body['includeBlankCells'] as bool? ?? true,
+      includeSolveSteps: false,
     ),
   );
   return {

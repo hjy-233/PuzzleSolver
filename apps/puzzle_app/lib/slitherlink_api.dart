@@ -74,10 +74,10 @@ final class SlitherlinkApi {
         .timeout(const Duration(seconds: 90));
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('Pi 后端返回了无效数据。');
+      throw const FormatException('服务器返回了无效数据。');
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw StateError(decoded['error'] as String? ?? 'Pi 后端请求失败。');
+      throw StateError(decoded['error'] as String? ?? '服务器请求失败。');
     }
     return decoded;
   }
