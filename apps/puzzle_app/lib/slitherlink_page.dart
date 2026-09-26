@@ -81,7 +81,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     _cancelHighlightFlash();
     setState(() {
       _isBusy = true;
-      _status = '正在请求 Pi 生成题目…';
+      _status = '服务器正在生成题目…';
     });
     try {
       final puzzle = await _api.generate(
@@ -99,7 +99,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       if (!mounted) return;
       setState(() {
         _isBusy = false;
-        _status = 'Pi 生成失败：$error';
+        _status = '服务器生成失败：$error';
       });
     }
   }
@@ -273,7 +273,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       final baseState = _steps.isEmpty ? _session.state : null;
       setState(() {
         _isBusy = true;
-        _status = '正在请求 Pi 自动解题…';
+        _status = '服务器正在解题…';
       });
       final result = await _api.solve(_puzzle, _session.state);
       if (!mounted) return;
@@ -310,7 +310,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   Future<void> _check() async {
     setState(() {
       _isBusy = true;
-      _status = '正在请求 Pi 检查答案…';
+      _status = '服务器正在检查答案…';
     });
     try {
       final result = await _api.check(_puzzle, _session.state);
@@ -739,7 +739,7 @@ class _Controls extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.casino_outlined),
-          label: Text(isBusy ? 'Pi 正在处理…' : '按此设置生成新题'),
+          label: Text(isBusy ? '服务器正在处理…' : '按此设置生成新题'),
         ),
         const SizedBox(height: 8),
         if (editingClues)
