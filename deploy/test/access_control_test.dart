@@ -28,7 +28,7 @@ void main() {
   );
 
   test(
-    'allows five heavy operations per IP per UTC day and persists usage',
+    'allows one heavy operation per IP per UTC day and persists usage',
     () async {
       final store = await openStore();
       for (var use = 0; use < dailyServerOperationLimit; use++) {
@@ -50,19 +50,22 @@ void main() {
     },
   );
 
-  test(
-    'invited operations bypass daily quota but not IP accounting state',
-    () async {
-      final store = await openStore();
-      for (var use = 0; use < dailyServerOperationLimit; use++) {
-        await store.consumeHeavyOperation('192.0.2.11', invited: false);
-      }
+  test('invited operations bypass daily quota without a usage cap', () async {
+    final store = await openStore();
+    for (var use = 0; use < dailyServerOperationLimit; use++) {
+      await store.consumeHeavyOperation('192.0.2.11', invited: false);
+    }
+    expect(
+      await store.consumeHeavyOperation('192.0.2.11', invited: true),
+      isTrue,
+    );
+    for (var use = 0; use < 20; use++) {
       expect(
         await store.consumeHeavyOperation('192.0.2.11', invited: true),
         isTrue,
       );
-    },
-  );
+    }
+  });
 
   test('invitation survives restart and rotates after one week', () async {
     final store = await openStore();
@@ -105,6 +108,6 @@ void main() {
         (_) => store.consumeHeavyOperation('192.0.2.13', invited: false),
       ),
     );
-    expect(results.where((allowed) => allowed), hasLength(5));
+    expect(results.where((allowed) => allowed), hasLength(1));
   });
 }

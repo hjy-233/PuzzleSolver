@@ -248,6 +248,31 @@ void main() {
     expect(const SlitherlinkSolver().countSolutions(generated.puzzle), 1);
   });
 
+  test('fast generator remains reliable across common 5x5 seeds', () {
+    const generator = SlitherlinkGenerator();
+    for (var seed = 0; seed < 8; seed++) {
+      for (final difficulty in [
+        PuzzleDifficulty.normal,
+        PuzzleDifficulty.hard,
+      ]) {
+        final generated = generator.generate(
+          SlitherlinkGenerationOptions(
+            rows: 5,
+            columns: 5,
+            difficulty: difficulty,
+            includeSolveSteps: false,
+            seed: seed,
+          ),
+        );
+        expect(
+          generated.solveResult.hasUniqueSolution,
+          isTrue,
+          reason: 'seed=$seed, difficulty=$difficulty',
+        );
+      }
+    }
+  });
+
   test('fast generation keeps normal and hard tiers meaningfully distinct', () {
     const generator = SlitherlinkGenerator();
     GeneratedSlitherlinkPuzzle generate(PuzzleDifficulty difficulty) =>

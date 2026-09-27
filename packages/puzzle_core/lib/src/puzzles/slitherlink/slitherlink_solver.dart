@@ -99,8 +99,10 @@ final class SlitherlinkGenerator
     final uniquenessSolver = SlitherlinkSolver(
       maxSearchNodes: quickGeneration
           ? area >= 64
-                ? 800
-                : 5000
+                ? 2000
+                : area >= 36
+                ? 8000
+                : 10000
           : area >= 64
           ? 2000
           : area >= 36
@@ -109,12 +111,12 @@ final class SlitherlinkGenerator
     );
     final attemptLimit = quickGeneration
         ? switch ((area >= 64, options.difficulty)) {
-            (true, PuzzleDifficulty.easy) => 2,
-            (true, PuzzleDifficulty.normal) => 3,
-            (true, PuzzleDifficulty.hard) => 3,
-            (false, PuzzleDifficulty.easy) => 1,
-            (false, PuzzleDifficulty.normal) => 6,
-            (false, PuzzleDifficulty.hard) => 12,
+            (true, PuzzleDifficulty.easy) => 4,
+            (true, PuzzleDifficulty.normal) => 6,
+            (true, PuzzleDifficulty.hard) => 8,
+            (false, PuzzleDifficulty.easy) => 2,
+            (false, PuzzleDifficulty.normal) => 10,
+            (false, PuzzleDifficulty.hard) => 16,
           }
         : switch (options.difficulty) {
             PuzzleDifficulty.easy => 1,
@@ -205,7 +207,7 @@ final class SlitherlinkGenerator
           bestCandidate = candidate;
           bestDifficultyDistance = difficultyDistance;
         }
-        if (!quickGeneration && difficultyDistance < .2) return candidate;
+        if (quickGeneration || difficultyDistance < .2) return candidate;
       }
     }
     if (bestCandidate != null) return bestCandidate;

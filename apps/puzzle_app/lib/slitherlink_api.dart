@@ -99,7 +99,8 @@ final class SlitherlinkApi {
       final code = decoded['code'];
       if ((response.statusCode == 429 &&
               (code == 'daily_quota_exceeded' || code == 'rate_limited')) ||
-          (response.statusCode == 503 && code == 'server_busy')) {
+          (response.statusCode == 503 &&
+              (code == 'server_busy' || code == 'generation_failed'))) {
         throw const _UseBrowserCompute();
       }
       throw StateError(decoded['error'] as String? ?? '服务器请求失败。');
