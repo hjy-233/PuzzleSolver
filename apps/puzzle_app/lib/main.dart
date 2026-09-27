@@ -16,6 +16,8 @@ class PuzzleApp extends StatelessWidget {
     return MaterialApp(
       title: 'PuzzleSolver',
       debugShowCheckedModeBanner: false,
+      initialRoute: '/slitherlink',
+      routes: {'/slitherlink': (_) => const SlitherlinkPage()},
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(

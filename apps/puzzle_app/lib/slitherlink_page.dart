@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:puzzle_core/puzzle_core.dart';
 
+import 'browser_url.dart';
+import 'puzzle_share.dart';
 import 'slitherlink_api.dart';
 
 class SlitherlinkPage extends StatefulWidget {
@@ -37,6 +40,42 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   @override
   void initState() {
     super.initState();
+    final canonicalUrl = Uri.base.replace(path: '/slitherlink');
+    if (canonicalUrl.toString() != Uri.base.toString()) {
+      BrowserUrl.replace(canonicalUrl);
+    }
+    final sharedPuzzle = Uri.base.queryParameters['p'];
+    if (sharedPuzzle != null) {
+      try {
+        _puzzle = SlitherlinkShare.decodePuzzle(sharedPuzzle);
+        _rows = _puzzle.topology.rows;
+        _columns = _puzzle.topology.columns;
+        _rowsController.text = '$_rows';
+        _columnsController.text = '$_columns';
+        _session = PuzzleSession.start(
+          initialState: _puzzle.initialState,
+          reducer: _puzzle.reduce,
+        );
+        final encodedProgress = Uri.base.queryParameters['s'];
+        if (encodedProgress != null) {
+          final progress = SlitherlinkShare.decodeProgress(
+            encodedProgress,
+            _puzzle.topology,
+          );
+          for (final entry in progress.edges.entries) {
+            _session = _session.apply(
+              SetSlitherlinkEdge(entry.key, entry.value),
+            );
+          }
+          _status = '已从分享链接恢复题目和进度。';
+        } else {
+          _status = '已从分享链接打开题目。';
+        }
+        return;
+      } on FormatException catch (error) {
+        _status = '分享链接无效：${error.message}';
+      }
+    }
     _puzzle = SlitherlinkPuzzle(
       topology: const GridTopology(rows: 5, columns: 5),
       clues: const {},
@@ -97,6 +136,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _replaceWithGeneratedPuzzle(puzzle);
         _isBusy = false;
       });
+      _syncCurrentUrl();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -130,6 +170,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _editingClues = true;
       _status = '点击格子填写 0–4；空白格留空。填完后点“完成录入”再自动解题。';
     });
+    _syncCurrentUrl();
   }
 
   void _finishManualEntry() {
@@ -212,6 +253,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = null;
       _status = '题目已更新。';
     });
+    _syncCurrentUrl();
   }
 
   void _updateDimension(String text, {required bool rows}) {
@@ -240,6 +282,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = null;
       _status = gesture == PointerGesture.primaryTap ? '已画线。' : '已标记为不可能。';
     });
+    _syncCurrentUrl();
   }
 
   void _showHint() {
@@ -260,6 +303,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = null;
       _status = _explanationFor(step);
     });
+    _syncCurrentUrl();
   }
 
   Future<void> _solve() async {
@@ -300,6 +344,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _isBusy = false;
         _status = '自动解题完成：${result.steps.length} 个可解释步骤。';
       });
+      _syncCurrentUrl();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -347,6 +392,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = null;
       _status = '已撤销一步。';
     });
+    _syncCurrentUrl();
   }
 
   void _redo() {
@@ -362,6 +408,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = null;
       _status = '已重做一步。';
     });
+    _syncCurrentUrl();
   }
 
   void _replayToStep(int index) {
@@ -391,6 +438,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _selectedStepIndex = index;
       _status = '步骤 $actionCount：${_explanationFor(_steps[index])}';
     });
+    _syncCurrentUrl();
     _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
       if (!mounted) {
         return;
@@ -402,6 +450,40 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   void _cancelHighlightFlash() {
     _highlightTimer?.cancel();
     _highlightTimer = null;
+  }
+
+  void _syncCurrentUrl() {
+    final url = Uri.base.replace(
+      path: '/slitherlink',
+      queryParameters: {
+        'p': SlitherlinkShare.encodePuzzle(_puzzle),
+        's': SlitherlinkShare.encodeProgress(_session.state),
+      },
+    );
+    BrowserUrl.replace(url);
+  }
+
+  Future<void> _share(_ShareMode mode) async {
+    final queryParameters = <String, String>{
+      if (mode != _ShareMode.puzzlePage)
+        'p': SlitherlinkShare.encodePuzzle(_puzzle),
+      if (mode == _ShareMode.puzzleAndProgress)
+        's': SlitherlinkShare.encodeProgress(_session.state),
+    };
+    final url = Uri.base
+        .replace(path: '/slitherlink', queryParameters: queryParameters)
+        .toString();
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(switch (mode) {
+          _ShareMode.puzzlePage => '数回页面链接已复制。',
+          _ShareMode.puzzle => '当前题目链接已复制。',
+          _ShareMode.puzzleAndProgress => '题目和当前进度链接已复制。',
+        }),
+      ),
+    );
   }
 
   @override
@@ -426,6 +508,22 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       appBar: AppBar(
         title: const Text('PuzzleSolver'),
         actions: [
+          PopupMenuButton<_ShareMode>(
+            tooltip: '分享',
+            icon: const Icon(Icons.share_outlined),
+            onSelected: (mode) => unawaited(_share(mode)),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _ShareMode.puzzlePage,
+                child: Text('仅分享数回页面'),
+              ),
+              PopupMenuItem(value: _ShareMode.puzzle, child: Text('分享当前谜题')),
+              PopupMenuItem(
+                value: _ShareMode.puzzleAndProgress,
+                child: Text('分享谜题和当前进度'),
+              ),
+            ],
+          ),
           TextButton.icon(
             onPressed: _isBusy ? null : () => unawaited(_newPuzzle()),
             icon: const Icon(Icons.refresh),
@@ -549,6 +647,8 @@ final class _ClueEditResult {
 
   final int? value;
 }
+
+enum _ShareMode { puzzlePage, puzzle, puzzleAndProgress }
 
 String _stepTitle(SolveStep<SlitherlinkAction> step) => switch (step.ruleId) {
   'slitherlink.clueReached' => '数字满足',

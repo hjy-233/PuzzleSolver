@@ -1,22 +1,19 @@
 # puzzle_core
 
-Pure Dart foundation for grid logic puzzles. It has no Flutter, backend, or
-shared `CellState` dependency.
+网格谜题的纯 Dart 核心包，不依赖 Flutter、后端服务，也不强制共享谜题状态模型。
 
-## What is shared
+## 通用能力
 
-- rectangular `GridTopology` with canonical `CellId`, `EdgeId`, and `VertexId`;
-- renderer hit targets and pointer gestures;
-- immutable action-log sessions with undo, redo, and replay;
-- structured `SolveStep` data for localized, inspectable explanations.
+- 矩形棋盘拓扑，以及唯一的 `CellId`、`EdgeId`、`VertexId` 标识。
+- 渲染命中目标和指针手势的通用模型。
+- 支持撤销、重做和重放的不可变操作会话。
+- 结构化推理步骤，可供界面本地化和逐步展示。
 
-## What stays puzzle-specific
+## 谜题专属能力
 
-Each puzzle owns its state, action types, rules, checker, and solver. The first
-reference implementation is Slitherlink, which demonstrates that an edge state
-is not attached to either adjacent cell.
+每种谜题自行定义状态、动作、规则、检查器和求解器。当前提供数回（Slitherlink）作为边优先谜题示例，展示边状态不归属于边旁任一格子的设计。
 
-Run checks with:
+## 检查
 
 ```sh
 dart format --set-exit-if-changed lib test

@@ -1,41 +1,38 @@
 # PuzzleSolver
 
-A Dart platform for grid logic puzzles. It models a puzzle as topology plus
-puzzle-specific state and rules, rather than treating every puzzle as a grid of
-buttons.
+一个用于网格逻辑谜题的 Dart 平台。谜题由棋盘拓扑、谜题专属状态和规则组成。
 
-## Packages
+## 项目结构
 
-`packages/puzzle_core` is a pure Dart package with no Flutter or server
-dependency. It currently provides:
+- `packages/puzzle_core`：纯 Dart 核心，不依赖 Flutter 或服务器。提供统一的格子、边、交点标识，矩形棋盘拓扑、交互动作、可撤销/重做的操作记录、结构化推理步骤，以及数回参考实现。
+- `apps/puzzle_app`：Flutter Web 前端。目前提供数回的生成、游玩、录入、提示、自动求解、答案检查和步骤回放。
+- `deploy`：Dart HTTP 服务。负责静态网页托管以及数回生成、求解和检查 API。
 
-- canonical `CellId`, `EdgeId`, and `VertexId` identifiers;
-- rectangular grid adjacency and boundary rules;
-- renderer hit targets and puzzle-owned actions;
-- immutable action logs with undo, redo, and replay;
-- structured, localizable solution steps;
-- an edge-first Slitherlink reference implementation.
+## 本地开发
 
-`apps/puzzle_app` is the Flutter Web player. Its first screen renders and
-plays the Slitherlink reference puzzle with edge hit testing, line/cross
-interaction, hints, checking, undo, redo, and step replay.
-
-## Development
+运行核心测试：
 
 ```sh
-cd packages/puzzle_core && dart test
-cd ../../apps/puzzle_app && flutter run -d web-server
+cd packages/puzzle_core
+dart format --set-exit-if-changed lib test
+dart analyze
+dart test
 ```
 
-The next core milestone is a second, Cell-first puzzle. It will verify that
-the shared layer does not accidentally become specific to line-drawing puzzles.
+运行 Flutter Web 前端：
 
-## Deployment
+```sh
+cd apps/puzzle_app
+flutter pub get
+flutter run -d web-server
+```
 
-`project-deployer.json` deploys the Flutter Web player to a 64-bit Raspberry
- Pi through ProjectDeployer. It builds an ARM64 image from `Dockerfile`, serves
-the generated web files through a small Dart static HTTP server, and exposes
-the app on port `18082`.
+## 部署
 
-The deployment manifest keeps the runtime stateless: no volumes or secrets
-are required for the current local-only puzzle player.
+根目录的 `Dockerfile` 会构建 Flutter Web 页面和 Dart 服务。`project-deployer.json` 用于在 64 位 Raspberry Pi OS（ARM64）上通过 ProjectDeployer 部署；应用监听容器内的 8080 端口，并映射到主机的 18082 端口。
+
+当前服务无状态，不需要持久化卷或密钥。谜题和游玩进度由分享链接携带，不保存在服务器数据库中。
+
+## 授权协议
+
+本项目使用 MIT License，详见 [`LICENSE`](LICENSE)。
