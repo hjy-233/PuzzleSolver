@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:puzzle_core/puzzle_core.dart';
@@ -38,6 +39,9 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   bool _completionDialogOpen = false;
   bool _completionDialogDismissed = false;
   bool _hasServerInvitation = false;
+  bool _stepsVisible = true;
+  bool _puzzleSidebarVisible = true;
+  bool _controlsSidebarVisible = true;
   String _status = '左键画线，右键打叉。';
 
   @override
@@ -310,6 +314,25 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _highlights = [];
       _selectedStepIndex = null;
       _status = gesture == PointerGesture.primaryTap ? '已画线。' : '已标记为不可能。';
+    });
+    _syncCurrentUrl();
+    unawaited(_showCompletionDialogIfSolved());
+  }
+
+  void _handleStroke(Map<EdgeId, SlitherlinkEdgeState> edges) {
+    if (edges.isEmpty) return;
+    _cancelHighlightFlash();
+    setState(() {
+      _session = _session.apply(SetSlitherlinkEdges(edges));
+      _steps = [];
+      _stepBaseState = null;
+      _highlights = [];
+      _selectedStepIndex = null;
+      _status = switch (edges.values.first) {
+        SlitherlinkEdgeState.line => '已完成一笔连续画线。',
+        SlitherlinkEdgeState.crossed => '已完成一笔连续打叉。',
+        SlitherlinkEdgeState.empty => '已擦除一笔标记。',
+      };
     });
     _syncCurrentUrl();
     unawaited(_showCompletionDialogIfSolved());
@@ -639,6 +662,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       editingClues: _editingClues,
       onCellTap: _editClue,
       onGesture: _handleGesture,
+      onStroke: _handleStroke,
     );
     return Scaffold(
       drawer: mobileLayout ? _buildMobileDrawer(context) : null,
@@ -718,6 +742,20 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
                 const SizedBox(width: 8),
               ]
             : [
+                if (!_puzzleSidebarVisible)
+                  IconButton(
+                    tooltip: '显示谜题栏',
+                    onPressed: () =>
+                        setState(() => _puzzleSidebarVisible = true),
+                    icon: const Icon(Icons.menu_open),
+                  ),
+                if (!_controlsSidebarVisible)
+                  IconButton(
+                    tooltip: '显示设置栏',
+                    onPressed: () =>
+                        setState(() => _controlsSidebarVisible = true),
+                    icon: const Icon(Icons.tune),
+                  ),
                 PopupMenuButton<_ShareMode>(
                   tooltip: '分享',
                   icon: const Icon(Icons.share_outlined),
@@ -763,6 +801,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
             descriptionFor: _explanationFor,
             selectedStepIndex: _selectedStepIndex,
             sizeLabel: '${_puzzle.topology.rows} × ${_puzzle.topology.columns}',
+            onClose: () => setState(() => _puzzleSidebarVisible = false),
           );
           if (constraints.maxWidth < 920) {
             return Column(
@@ -776,27 +815,44 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
                   onSettings: _showSettingsSheet,
                 ),
                 const Divider(height: 1),
-                Expanded(
-                  flex: 5,
-                  child: _MobileStepsPanel(
-                    steps: _steps,
-                    selectedStepIndex: _selectedStepIndex,
-                    descriptionFor: _explanationFor,
-                    onStepTap: _replayToStep,
-                    status: _status,
+                if (_stepsVisible)
+                  Expanded(
+                    flex: 5,
+                    child: _MobileStepsPanel(
+                      steps: _steps,
+                      selectedStepIndex: _selectedStepIndex,
+                      descriptionFor: _explanationFor,
+                      onStepTap: _replayToStep,
+                      onHide: () => setState(() => _stepsVisible = false),
+                      status: _status,
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 40,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _stepsVisible = true),
+                      icon: const Icon(Icons.expand_less),
+                      label: const Text('显示推理步骤'),
+                    ),
                   ),
-                ),
               ],
             );
           }
-          final controls = _buildControls();
+          final controls = _buildControls(
+            onClose: () => setState(() => _controlsSidebarVisible = false),
+          );
           return Row(
             children: [
-              SizedBox(width: 250, child: sidebar),
-              const VerticalDivider(width: 1),
+              if (_puzzleSidebarVisible) ...[
+                SizedBox(width: 250, child: sidebar),
+                const VerticalDivider(width: 1),
+              ],
               Expanded(child: content),
-              const VerticalDivider(width: 1),
-              SizedBox(width: 310, child: controls),
+              if (_controlsSidebarVisible) ...[
+                const VerticalDivider(width: 1),
+                SizedBox(width: 310, child: controls),
+              ],
             ],
           );
         },
@@ -830,6 +886,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   _Controls _buildControls({
     bool settingsOnly = false,
     VoidCallback? refreshSettings,
+    VoidCallback? onClose,
   }) => _Controls(
     onHint: _showHint,
     onSolve: _solve,
@@ -866,6 +923,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     isBusy: _isBusy,
     status: _status,
     settingsOnly: settingsOnly,
+    onClose: onClose,
   );
 
   void _showSettingsSheet() {
@@ -964,6 +1022,7 @@ class _Sidebar extends StatelessWidget {
     required this.descriptionFor,
     required this.selectedStepIndex,
     required this.sizeLabel,
+    required this.onClose,
   });
 
   final List<SolveStep<SlitherlinkAction>> steps;
@@ -971,6 +1030,7 @@ class _Sidebar extends StatelessWidget {
   final String Function(SolveStep<SlitherlinkAction> step) descriptionFor;
   final int? selectedStepIndex;
   final String sizeLabel;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) => ColoredBox(
@@ -978,11 +1038,22 @@ class _Sidebar extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 24, 20, 10),
-          child: Text(
-            '谜题库',
-            style: TextStyle(fontSize: 14, color: Color(0xFFB6B9C7)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '谜题库',
+                  style: TextStyle(fontSize: 14, color: Color(0xFFB6B9C7)),
+                ),
+              ),
+              IconButton(
+                tooltip: '隐藏谜题栏',
+                onPressed: onClose,
+                icon: const Icon(Icons.close),
+              ),
+            ],
           ),
         ),
         ListTile(
@@ -1105,6 +1176,7 @@ class _MobileStepsPanel extends StatelessWidget {
     required this.selectedStepIndex,
     required this.descriptionFor,
     required this.onStepTap,
+    required this.onHide,
     required this.status,
   });
 
@@ -1112,6 +1184,7 @@ class _MobileStepsPanel extends StatelessWidget {
   final int? selectedStepIndex;
   final String Function(SolveStep<SlitherlinkAction> step) descriptionFor;
   final ValueChanged<int> onStepTap;
+  final VoidCallback onHide;
   final String status;
 
   @override
@@ -1135,6 +1208,12 @@ class _MobileStepsPanel extends StatelessWidget {
                   label: Text('${steps.length}'),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: '隐藏推理步骤',
+                  onPressed: onHide,
+                  icon: const Icon(Icons.expand_more),
                 ),
               ],
             ),
@@ -1223,6 +1302,7 @@ class _Controls extends StatelessWidget {
     required this.onFinishManualEntry,
     required this.isBusy,
     required this.status,
+    this.onClose,
     this.settingsOnly = false,
   });
 
@@ -1245,6 +1325,7 @@ class _Controls extends StatelessWidget {
   final VoidCallback onFinishManualEntry;
   final bool isBusy;
   final String status;
+  final VoidCallback? onClose;
   final bool settingsOnly;
 
   @override
@@ -1253,7 +1334,22 @@ class _Controls extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('数回', style: Theme.of(context).textTheme.headlineSmall),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '数回',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+            ),
+            if (onClose != null)
+              IconButton(
+                tooltip: '隐藏设置栏',
+                onPressed: onClose,
+                icon: const Icon(Icons.close),
+              ),
+          ],
+        ),
         const SizedBox(height: 6),
         const Text('让所有线段组成一个闭环，并让每个数字格周围的线数相等。'),
         const SizedBox(height: 22),
@@ -1382,6 +1478,7 @@ class _BoardPanel extends StatefulWidget {
     required this.editingClues,
     required this.onCellTap,
     required this.onGesture,
+    required this.onStroke,
   });
 
   final SlitherlinkPuzzle puzzle;
@@ -1390,6 +1487,7 @@ class _BoardPanel extends StatefulWidget {
   final bool editingClues;
   final ValueChanged<CellId> onCellTap;
   final void Function(PuzzleTarget, PointerGesture) onGesture;
+  final ValueChanged<Map<EdgeId, SlitherlinkEdgeState>> onStroke;
 
   @override
   State<_BoardPanel> createState() => _BoardPanelState();
@@ -1397,6 +1495,22 @@ class _BoardPanel extends StatefulWidget {
 
 class _BoardPanelState extends State<_BoardPanel> {
   final _transformationController = TransformationController();
+  final _focusNode = FocusNode();
+  final _touchPositions = <int, Offset>{};
+  final _canvasTouchPointers = <int>{};
+  final _strokeChanges = <EdgeId, SlitherlinkEdgeState>{};
+  final _strokeVisited = <EdgeId>{};
+  int? _strokePointer;
+  int? _pendingTapPointer;
+  Offset? _touchDownPosition;
+  Offset? _lastStrokePosition;
+  EdgeId? _pendingTapEdge;
+  DateTime? _pendingTapTime;
+  Timer? _pendingTapTimer;
+  SlitherlinkEdgeState? _strokeState;
+  bool _touchDragStarted = false;
+  bool _multiTouchActive = false;
+  Map<EdgeId, SlitherlinkEdgeState> _previewEdges = {};
 
   @override
   void didUpdateWidget(covariant _BoardPanel oldWidget) {
@@ -1409,8 +1523,282 @@ class _BoardPanelState extends State<_BoardPanel> {
 
   @override
   void dispose() {
+    _pendingTapTimer?.cancel();
+    _focusNode.dispose();
     _transformationController.dispose();
     super.dispose();
+  }
+
+  void _panBy(Offset delta) {
+    final matrix = _transformationController.value.clone();
+    matrix.storage[12] += delta.dx;
+    matrix.storage[13] += delta.dy;
+    _transformationController.value = matrix;
+  }
+
+  void _zoomAt(Offset oldFocalPoint, Offset newFocalPoint, double factor) {
+    final matrix = _transformationController.value;
+    final currentScale = matrix.getMaxScaleOnAxis();
+    final nextScale = (currentScale * factor).clamp(.7, 5.0);
+    final sceneAnchor = _transformationController.toScene(oldFocalPoint);
+    final next = Matrix4.identity()
+      ..translateByDouble(
+        newFocalPoint.dx - sceneAnchor.dx * nextScale,
+        newFocalPoint.dy - sceneAnchor.dy * nextScale,
+        0,
+        1,
+      )
+      ..scaleByDouble(nextScale, nextScale, 1, 1);
+    _transformationController.value = next;
+  }
+
+  void _onViewportPointerDown(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    _touchPositions[event.pointer] = event.localPosition;
+    if (_touchPositions.length == 1) return;
+    _commitPendingTap();
+    _multiTouchActive = true;
+    if (_strokePointer != null) _finishStroke();
+    _strokePointer = null;
+    _pendingTapPointer = null;
+  }
+
+  void _onViewportPointerMove(PointerMoveEvent event) {
+    if (!_touchPositions.containsKey(event.pointer) ||
+        _touchPositions.length < 2) {
+      return;
+    }
+    final oldFocalPoint = _touchCentroid();
+    final oldDistance = _touchDistance();
+    _touchPositions[event.pointer] = event.localPosition;
+    final newFocalPoint = _touchCentroid();
+    final newDistance = _touchDistance();
+    if (oldDistance > 0 && newDistance > 0) {
+      _zoomAt(oldFocalPoint, newFocalPoint, newDistance / oldDistance);
+    } else {
+      _panBy(newFocalPoint - oldFocalPoint);
+    }
+  }
+
+  void _onViewportPointerUp(PointerEvent event) {
+    _touchPositions.remove(event.pointer);
+    if (_touchPositions.isEmpty) _multiTouchActive = false;
+  }
+
+  Offset _touchCentroid() {
+    final points = _touchPositions.values.take(2).toList();
+    if (points.length < 2) return points.firstOrNull ?? Offset.zero;
+    return (points[0] + points[1]) / 2;
+  }
+
+  double _touchDistance() {
+    final points = _touchPositions.values.take(2).toList();
+    return points.length < 2 ? 0 : (points[1] - points[0]).distance;
+  }
+
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      _panBy(Offset(-event.scrollDelta.dx, -event.scrollDelta.dy));
+    }
+  }
+
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final delta = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowLeft => const Offset(48, 0),
+      LogicalKeyboardKey.arrowRight => const Offset(-48, 0),
+      LogicalKeyboardKey.arrowUp => const Offset(0, 48),
+      LogicalKeyboardKey.arrowDown => const Offset(0, -48),
+      _ => null,
+    };
+    if (delta == null) return KeyEventResult.ignored;
+    _panBy(delta);
+    return KeyEventResult.handled;
+  }
+
+  void _onCanvasPointerDown(PointerDownEvent event, _BoardGeometry geometry) {
+    _focusNode.requestFocus();
+    if (widget.editingClues) return;
+    if (event.kind == PointerDeviceKind.touch) {
+      _canvasTouchPointers.add(event.pointer);
+      if (_canvasTouchPointers.length > 1) {
+        _multiTouchActive = true;
+        if (_strokePointer != null) _finishStroke();
+        _strokePointer = null;
+        _pendingTapPointer = null;
+        return;
+      }
+      _pendingTapPointer = event.pointer;
+      _touchDownPosition = event.localPosition;
+      _touchDragStarted = false;
+      return;
+    }
+    if (event.kind != PointerDeviceKind.mouse) return;
+    final gesture = (event.buttons & 2) != 0
+        ? PointerGesture.secondaryTap
+        : (event.buttons & 1) != 0
+        ? PointerGesture.primaryTap
+        : null;
+    if (gesture != null) {
+      _beginStroke(event.pointer, event.localPosition, gesture, geometry);
+    }
+  }
+
+  void _onCanvasPointerMove(PointerMoveEvent event, _BoardGeometry geometry) {
+    if (event.kind == PointerDeviceKind.touch &&
+        event.pointer == _pendingTapPointer &&
+        !_touchDragStarted &&
+        !_multiTouchActive) {
+      final downPosition = _touchDownPosition;
+      if (downPosition != null &&
+          (event.localPosition - downPosition).distance > kTouchSlop) {
+        _commitPendingTap();
+        _touchDragStarted = true;
+        _beginStroke(
+          event.pointer,
+          downPosition,
+          PointerGesture.primaryTap,
+          geometry,
+        );
+      }
+    }
+    if (event.pointer == _strokePointer) {
+      _paintSegment(event.localPosition, geometry);
+    }
+  }
+
+  void _onCanvasPointerUp(PointerEvent event, _BoardGeometry geometry) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _canvasTouchPointers.remove(event.pointer);
+      if (event.pointer == _strokePointer && _touchDragStarted) {
+        _finishStroke();
+      } else if (event.pointer == _pendingTapPointer &&
+          !_multiTouchActive &&
+          !_touchDragStarted) {
+        final cell = widget.editingClues
+            ? geometry.hitCell(event.localPosition)
+            : null;
+        if (cell != null) {
+          widget.onCellTap(cell);
+        } else {
+          final edge = geometry.hitEdge(event.localPosition);
+          if (edge != null) _registerTouchTap(edge);
+        }
+      }
+      if (_canvasTouchPointers.isEmpty) _multiTouchActive = false;
+      _pendingTapPointer = null;
+      _touchDownPosition = null;
+      _touchDragStarted = false;
+      return;
+    }
+    if (event.pointer == _strokePointer) {
+      _finishStroke();
+    } else if (widget.editingClues && event is PointerUpEvent) {
+      final cell = geometry.hitCell(event.localPosition);
+      if (cell != null) widget.onCellTap(cell);
+    }
+  }
+
+  void _onCanvasPointerCancel(PointerCancelEvent event) {
+    _canvasTouchPointers.remove(event.pointer);
+    if (event.pointer == _strokePointer) _finishStroke();
+    if (event.pointer == _pendingTapPointer) _pendingTapPointer = null;
+    if (_canvasTouchPointers.isEmpty) _multiTouchActive = false;
+  }
+
+  void _registerTouchTap(EdgeId edge) {
+    final now = DateTime.now();
+    final previousEdge = _pendingTapEdge;
+    final previousTime = _pendingTapTime;
+    if (previousEdge == edge &&
+        previousTime != null &&
+        now.difference(previousTime) <= kDoubleTapTimeout) {
+      _pendingTapTimer?.cancel();
+      _pendingTapTimer = null;
+      _pendingTapEdge = null;
+      _pendingTapTime = null;
+      widget.onGesture(EdgeTarget(edge), PointerGesture.secondaryTap);
+      return;
+    }
+    _commitPendingTap();
+    _pendingTapEdge = edge;
+    _pendingTapTime = now;
+    _pendingTapTimer = Timer(kDoubleTapTimeout, _commitPendingTap);
+  }
+
+  void _commitPendingTap() {
+    _pendingTapTimer?.cancel();
+    _pendingTapTimer = null;
+    final edge = _pendingTapEdge;
+    _pendingTapEdge = null;
+    _pendingTapTime = null;
+    if (edge != null && mounted) {
+      widget.onGesture(EdgeTarget(edge), PointerGesture.primaryTap);
+    }
+  }
+
+  void _beginStroke(
+    int pointer,
+    Offset position,
+    PointerGesture gesture,
+    _BoardGeometry geometry,
+  ) {
+    final edge = geometry.hitEdge(position);
+    if (edge == null) return;
+    _strokePointer = pointer;
+    _lastStrokePosition = position;
+    _strokeVisited.clear();
+    _strokeChanges.clear();
+    final current = widget.state.stateOf(edge);
+    _strokeState = switch (gesture) {
+      PointerGesture.primaryTap =>
+        current == SlitherlinkEdgeState.line
+            ? SlitherlinkEdgeState.empty
+            : SlitherlinkEdgeState.line,
+      PointerGesture.secondaryTap =>
+        current == SlitherlinkEdgeState.crossed
+            ? SlitherlinkEdgeState.empty
+            : SlitherlinkEdgeState.crossed,
+      PointerGesture.doubleTap || PointerGesture.longPress => null,
+    };
+    _paintEdge(edge);
+  }
+
+  void _paintSegment(Offset position, _BoardGeometry geometry) {
+    final previous = _lastStrokePosition;
+    if (previous == null) return;
+    final distance = (position - previous).distance;
+    final spacing = math.max(geometry.cellSize * .25, 1);
+    final sampleCount = (distance / spacing).ceil().clamp(1, 256);
+    for (var sample = 1; sample <= sampleCount; sample++) {
+      final point = Offset.lerp(previous, position, sample / sampleCount);
+      if (point != null) {
+        final edge = geometry.hitEdge(point);
+        if (edge != null) _paintEdge(edge);
+      }
+    }
+    _lastStrokePosition = position;
+  }
+
+  void _paintEdge(EdgeId edge) {
+    if (!_strokeVisited.add(edge)) return;
+    final targetState = _strokeState;
+    if (targetState == null) return;
+    final current = widget.state.stateOf(edge);
+    if (current == targetState) return;
+    _strokeChanges[edge] = targetState;
+    setState(() => _previewEdges = Map.of(_strokeChanges));
+  }
+
+  void _finishStroke() {
+    _strokePointer = null;
+    _lastStrokePosition = null;
+    _strokeState = null;
+    final changes = Map<EdgeId, SlitherlinkEdgeState>.of(_strokeChanges);
+    _strokeChanges.clear();
+    _strokeVisited.clear();
+    if (mounted) setState(() => _previewEdges = {});
+    if (changes.isNotEmpty) widget.onStroke(changes);
   }
 
   void _zoomBy(double factor) {
@@ -1433,103 +1821,95 @@ class _BoardPanelState extends State<_BoardPanel> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) => ClipRect(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          InteractiveViewer(
-            transformationController: _transformationController,
-            minScale: .7,
-            maxScale: 5,
-            boundaryMargin: const EdgeInsets.all(120),
-            child: SizedBox(
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: LayoutBuilder(
-                      builder: (context, boardConstraints) {
-                        final geometry = _BoardGeometry(
-                          widget.puzzle.topology,
-                          boardConstraints.biggest,
-                        );
-                        return GestureDetector(
-                          onTapUp: (details) {
-                            if (widget.editingClues) {
-                              final cell = geometry.hitCell(
-                                details.localPosition,
-                              );
-                              if (cell != null) widget.onCellTap(cell);
-                              return;
-                            }
-                            final edge = geometry.hitEdge(
-                              details.localPosition,
+      child: Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _onKeyEvent,
+        child: Listener(
+          onPointerDown: _onViewportPointerDown,
+          onPointerMove: _onViewportPointerMove,
+          onPointerUp: _onViewportPointerUp,
+          onPointerCancel: _onViewportPointerUp,
+          onPointerSignal: _onPointerSignal,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              InteractiveViewer(
+                transformationController: _transformationController,
+                panEnabled: false,
+                scaleEnabled: false,
+                minScale: .7,
+                maxScale: 5,
+                boundaryMargin: const EdgeInsets.all(120),
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Padding(
+                        padding: const EdgeInsets.all(28),
+                        child: LayoutBuilder(
+                          builder: (context, boardConstraints) {
+                            final geometry = _BoardGeometry(
+                              widget.puzzle.topology,
+                              boardConstraints.biggest,
                             );
-                            if (edge != null) {
-                              widget.onGesture(
-                                EdgeTarget(edge),
-                                PointerGesture.primaryTap,
-                              );
-                            }
-                          },
-                          onSecondaryTapUp: (details) {
-                            if (widget.editingClues) return;
-                            final edge = geometry.hitEdge(
-                              details.localPosition,
+                            return Listener(
+                              behavior: HitTestBehavior.opaque,
+                              onPointerDown: (event) =>
+                                  _onCanvasPointerDown(event, geometry),
+                              onPointerMove: (event) =>
+                                  _onCanvasPointerMove(event, geometry),
+                              onPointerUp: (event) =>
+                                  _onCanvasPointerUp(event, geometry),
+                              onPointerCancel: _onCanvasPointerCancel,
+                              child: CustomPaint(
+                                painter: _SlitherlinkPainter(
+                                  puzzle: widget.puzzle,
+                                  state: widget.state.withEdges(_previewEdges),
+                                  highlights: widget.highlights,
+                                  geometry: geometry,
+                                ),
+                                child: const SizedBox.expand(),
+                              ),
                             );
-                            if (edge != null) {
-                              widget.onGesture(
-                                EdgeTarget(edge),
-                                PointerGesture.secondaryTap,
-                              );
-                            }
                           },
-                          child: CustomPaint(
-                            painter: _SlitherlinkPainter(
-                              puzzle: widget.puzzle,
-                              state: widget.state,
-                              highlights: widget.highlights,
-                              geometry: geometry,
-                            ),
-                            child: const SizedBox.expand(),
-                          ),
-                        );
-                      },
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: Column(
+                  children: [
+                    _zoomButton(
+                      tooltip: '放大棋盘',
+                      icon: Icons.add,
+                      onPressed: () => _zoomBy(1.25),
+                    ),
+                    _zoomButton(
+                      tooltip: '缩小棋盘',
+                      icon: Icons.remove,
+                      onPressed: () => _zoomBy(.8),
+                    ),
+                    _zoomButton(
+                      tooltip: '重置棋盘缩放',
+                      icon: Icons.fit_screen_outlined,
+                      onPressed: () {
+                        _transformationController.value =
+                            _transformationController.value.clone()
+                              ..setIdentity();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          Positioned(
-            right: 8,
-            bottom: 8,
-            child: Column(
-              children: [
-                _zoomButton(
-                  tooltip: '放大棋盘',
-                  icon: Icons.add,
-                  onPressed: () => _zoomBy(1.25),
-                ),
-                _zoomButton(
-                  tooltip: '缩小棋盘',
-                  icon: Icons.remove,
-                  onPressed: () => _zoomBy(.8),
-                ),
-                _zoomButton(
-                  tooltip: '重置棋盘缩放',
-                  icon: Icons.fit_screen_outlined,
-                  onPressed: () {
-                    _transformationController.value =
-                        _transformationController.value.clone()..setIdentity();
-                  },
-                ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     ),
   );

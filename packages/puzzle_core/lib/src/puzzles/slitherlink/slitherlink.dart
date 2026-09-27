@@ -50,6 +50,14 @@ final class SetSlitherlinkEdge extends SlitherlinkAction {
   final SlitherlinkEdgeState state;
 }
 
+/// Applies a continuous pointer stroke as one undoable puzzle action.
+final class SetSlitherlinkEdges extends SlitherlinkAction {
+  SetSlitherlinkEdges(Map<EdgeId, SlitherlinkEdgeState> edges)
+    : edges = Map.unmodifiable(edges);
+
+  final Map<EdgeId, SlitherlinkEdgeState> edges;
+}
+
 /// A small but real rule engine for an edge-first puzzle.
 final class SlitherlinkPuzzle {
   SlitherlinkPuzzle({required this.topology, required Map<CellId, int> clues})
@@ -88,6 +96,17 @@ final class SlitherlinkPuzzle {
           );
         }
         return state.withEdge(edge, targetState);
+      case SetSlitherlinkEdges(:final edges):
+        for (final edge in edges.keys) {
+          if (!topology.containsEdge(edge)) {
+            throw ArgumentError.value(
+              edge,
+              'edges',
+              'Action is outside the topology',
+            );
+          }
+        }
+        return state.withEdges(edges);
     }
   }
 
