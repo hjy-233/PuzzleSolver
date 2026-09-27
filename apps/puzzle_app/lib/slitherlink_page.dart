@@ -610,6 +610,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
             descriptionFor: _explanationFor,
             selectedStepIndex: _selectedStepIndex,
             sizeLabel: '${_puzzle.topology.rows} × ${_puzzle.topology.columns}',
+            mobileLayout: constraints.maxWidth < 920,
           );
           final controls = _Controls(
             onHint: _showHint,
@@ -639,7 +640,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
               children: [
                 SizedBox(height: 400, child: content),
                 controls,
-                SizedBox(height: 190, child: sidebar),
+                sidebar,
               ],
             );
           }
@@ -734,6 +735,7 @@ class _Sidebar extends StatelessWidget {
     required this.descriptionFor,
     required this.selectedStepIndex,
     required this.sizeLabel,
+    this.mobileLayout = false,
   });
 
   final List<SolveStep<SlitherlinkAction>> steps;
@@ -741,11 +743,13 @@ class _Sidebar extends StatelessWidget {
   final String Function(SolveStep<SlitherlinkAction> step) descriptionFor;
   final int? selectedStepIndex;
   final String sizeLabel;
+  final bool mobileLayout;
 
   @override
   Widget build(BuildContext context) => ColoredBox(
     color: const Color(0xFF14161D),
     child: Column(
+      mainAxisSize: mobileLayout ? MainAxisSize.min : MainAxisSize.max,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Padding(
@@ -769,34 +773,52 @@ class _Sidebar extends StatelessWidget {
             style: const TextStyle(fontSize: 14, color: Color(0xFFB6B9C7)),
           ),
         ),
-        Expanded(
-          child: steps.isEmpty
-              ? const Center(
-                  child: Text(
-                    '还没有提示步骤',
-                    style: TextStyle(color: Color(0xFF9094A3)),
-                  ),
-                )
-              : ListView.builder(
-                  itemCount: steps.length,
-                  itemBuilder: (context, index) => ListTile(
-                    selected: index == selectedStepIndex,
-                    leading: CircleAvatar(
-                      radius: 12,
-                      child: Text('${index + 1}'),
-                    ),
-                    title: Text(_stepTitle(steps[index])),
-                    subtitle: Text(
-                      descriptionFor(steps[index]),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    onTap: () => onStepTap(index),
-                  ),
+        if (mobileLayout)
+          if (steps.isEmpty)
+            const SizedBox(
+              height: 112,
+              child: Center(
+                child: Text(
+                  '还没有提示步骤',
+                  style: TextStyle(color: Color(0xFF9094A3)),
                 ),
-        ),
+              ),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: steps.length,
+              itemBuilder: (context, index) => _buildStepTile(index),
+            )
+        else
+          Expanded(
+            child: steps.isEmpty
+                ? const Center(
+                    child: Text(
+                      '还没有提示步骤',
+                      style: TextStyle(color: Color(0xFF9094A3)),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: steps.length,
+                    itemBuilder: (context, index) => _buildStepTile(index),
+                  ),
+          ),
       ],
     ),
+  );
+
+  Widget _buildStepTile(int index) => ListTile(
+    selected: index == selectedStepIndex,
+    leading: CircleAvatar(radius: 12, child: Text('${index + 1}')),
+    title: Text(_stepTitle(steps[index])),
+    subtitle: Text(
+      descriptionFor(steps[index]),
+      maxLines: mobileLayout ? null : 2,
+      overflow: mobileLayout ? TextOverflow.visible : TextOverflow.ellipsis,
+    ),
+    onTap: () => onStepTap(index),
   );
 }
 
