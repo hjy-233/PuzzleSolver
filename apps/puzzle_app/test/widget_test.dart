@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:puzzle_app/main.dart';
+import 'package:puzzle_core/puzzle_core.dart';
 
 void main() {
   testWidgets('shows the Slitherlink player controls', (tester) async {
@@ -15,6 +16,29 @@ void main() {
     expect(find.text('新题'), findsOneWidget);
     expect(find.text('新题设置'), findsOneWidget);
     expect(find.text('高（行）'), findsOneWidget);
+    final initialDensity = tester.widget<Slider>(find.byType(Slider)).value;
+    await tester.tap(find.text('困难'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SegmentedButton<PuzzleDifficulty>>(
+            find.byType(SegmentedButton<PuzzleDifficulty>),
+          )
+          .selected,
+      {PuzzleDifficulty.hard},
+    );
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      isFalse,
+    );
+    await tester.drag(find.byType(Slider), const Offset(90, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<Slider>(find.byType(Slider)).value,
+      greaterThan(initialDensity),
+    );
     expect(find.text('宽（列）'), findsOneWidget);
     expect(find.text('允许空白格'), findsOneWidget);
     expect(find.text('提示'), findsOneWidget);
