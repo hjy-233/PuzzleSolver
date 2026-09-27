@@ -67,7 +67,7 @@ void main() {
     }
   });
 
-  test('invitation survives restart and rotates after one week', () async {
+  test('invitation remains unchanged and valid across long periods', () async {
     final store = await openStore();
     final invitation = store.currentInvitationCode;
     expect(invitation, hasLength(20));
@@ -80,12 +80,11 @@ void main() {
     final restarted = await openStore();
     expect(restarted.currentInvitationCode, invitation);
 
-    currentTime = currentTime.add(const Duration(days: 7));
-    expect(await restarted.rotateInvitationIfExpired(), isTrue);
+    currentTime = currentTime.add(const Duration(days: 3650));
     final rotated = await openStore();
-    expect(rotated.currentInvitationCode, isNot(invitation));
-    expect(rotated.isInvitationValid(invitation), isFalse);
-    expect(rotated.isInvitationValid(rotated.currentInvitationCode), isTrue);
+    expect(rotated.currentInvitationCode, invitation);
+    expect(rotated.isInvitationValid(invitation), isTrue);
+    expect(rotated.isInvitationValid('x'), isFalse);
   });
 
   test('daily quota resets at UTC midnight', () async {

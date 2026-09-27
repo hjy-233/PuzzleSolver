@@ -5,7 +5,11 @@ import 'package:http/http.dart' as http;
 import 'package:puzzle_core/puzzle_core.dart';
 
 final class SlitherlinkApi {
-  const SlitherlinkApi();
+  const SlitherlinkApi({this.client});
+
+  static final _defaultClient = http.Client();
+
+  final http.Client? client;
 
   Future<SlitherlinkPuzzle> generate({
     required int rows,
@@ -14,7 +18,8 @@ final class SlitherlinkApi {
     required bool includeBlankCells,
     required double clueDensity,
     required bool useServer,
-    VoidCallback? onLocalFallback,
+    String? invitationCode,
+    void Function(int attempts)? onRetry,
   }) async {
     final request = <String, Object?>{
       'rows': rows,
@@ -25,24 +30,47 @@ final class SlitherlinkApi {
     };
     late final Map<String, dynamic> response;
     if (!useServer) {
-      response = await compute(_generateLocally, request);
+      response = await _generateWithRetries(request, onRetry: onRetry);
     } else {
       try {
-        response = await _post('/api/puzzles/slitherlink/generate', request);
+        response = await _post(
+          '/api/puzzles/slitherlink/generate',
+          request,
+          invitationCode: invitationCode,
+        );
       } on _UseBrowserCompute {
-        onLocalFallback?.call();
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-        response = await compute(_generateLocally, request);
+        response = await _generateWithRetries(request, onRetry: onRetry);
       }
     }
     return _parsePuzzle(response);
+  }
+
+  Future<Map<String, dynamic>> _generateWithRetries(
+    Map<String, Object?> request, {
+    void Function(int attempts)? onRetry,
+  }) async {
+    var attempts = 0;
+    while (true) {
+      try {
+        return await compute(_generateLocally, request);
+      } on StateError catch (error) {
+        if (!error.toString().contains(
+          'Could not generate a unique irregular Slitherlink puzzle.',
+        )) {
+          rethrow;
+        }
+        attempts++;
+        onRetry?.call(attempts);
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    }
   }
 
   Future<SlitherlinkSolveResult> solve(
     SlitherlinkPuzzle puzzle,
     SlitherlinkState state, {
     required bool useServer,
-    VoidCallback? onLocalFallback,
+    String? invitationCode,
   }) async {
     final request = <String, Object?>{
       ..._serializePuzzle(puzzle),
@@ -53,10 +81,12 @@ final class SlitherlinkApi {
       response = await compute(_solveLocally, request);
     } else {
       try {
-        response = await _post('/api/puzzles/slitherlink/solve', request);
+        response = await _post(
+          '/api/puzzles/slitherlink/solve',
+          request,
+          invitationCode: invitationCode,
+        );
       } on _UseBrowserCompute {
-        onLocalFallback?.call();
-        await Future<void>.delayed(const Duration(milliseconds: 40));
         response = await compute(_solveLocally, request);
       }
     }
@@ -76,26 +106,11 @@ final class SlitherlinkApi {
     SlitherlinkState state,
   ) async => puzzle.check(state);
 
-  Future<DateTime> redeemInvitation(String code) async {
-    final response = await _post('/api/access/redeem', {'code': code});
-    if (response['authorized'] != true) {
-      throw const FormatException('邀请码验证失败。');
-    }
-    final expiresAt = response['expiresAt'];
-    if (expiresAt is! String) {
-      throw const FormatException('服务器没有返回邀请码有效期。');
-    }
-    final expiration = DateTime.tryParse(expiresAt);
-    if (expiration == null) {
-      throw const FormatException('服务器返回的邀请码有效期无效。');
-    }
-    return expiration;
-  }
-
   Future<Map<String, dynamic>> _post(
     String path,
-    Map<String, Object?> payload,
-  ) async {
+    Map<String, Object?> payload, {
+    String? invitationCode,
+  }) async {
     final encoded = jsonEncode(payload);
     const configuredBaseUrl = String.fromEnvironment('PUZZLE_API_BASE_URL');
     final baseUri = configuredBaseUrl.isNotEmpty
@@ -103,10 +118,14 @@ final class SlitherlinkApi {
         : Uri.base.host == 'localhost' || Uri.base.host == '127.0.0.1'
         ? Uri.parse('http://pi.local:18082')
         : Uri.base;
-    final response = await http
+    final response = await (client ?? _defaultClient)
         .post(
           baseUri.resolve(path),
-          headers: const {'Content-Type': 'application/json'},
+          headers: {
+            'Content-Type': 'application/json',
+            if (invitationCode != null && invitationCode.isNotEmpty)
+              'Authorization': 'Bearer $invitationCode',
+          },
           body: encoded,
         )
         .timeout(const Duration(seconds: 90));

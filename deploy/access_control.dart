@@ -3,36 +3,26 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-const weeklyInvitationLifetime = Duration(days: 7);
 const dailyServerOperationLimit = 1;
 const _maximumTrackedDailyIps = 20000;
 
-/// Persistent weekly invitation and per-IP daily heavy-operation accounting.
+/// Persistent API invitation and per-IP daily heavy-operation accounting.
 /// Only the current day's usage journal is retained.
 final class AccessControlStore {
   AccessControlStore._({
     required this.dataDirectory,
     required this.now,
-    required Random random,
     required String invitationCode,
-    required DateTime invitationCreatedAt,
-  }) : _random = random,
-       _invitationCode = invitationCode,
-       _invitationCreatedAt = invitationCreatedAt;
+  }) : _invitationCode = invitationCode;
 
   final Directory dataDirectory;
   final DateTime Function() now;
-  final Random _random;
   final Map<String, int> _dailyUse = {};
   String _invitationCode;
-  DateTime _invitationCreatedAt;
   DateTime? _loadedDay;
   Future<void> _writeQueue = Future<void>.value();
 
   String get currentInvitationCode => _invitationCode;
-
-  DateTime get invitationExpiresAt =>
-      _invitationCreatedAt.add(weeklyInvitationLifetime);
 
   static Future<AccessControlStore> open({
     required Directory dataDirectory,
@@ -52,33 +42,20 @@ final class AccessControlStore {
       }
     }
     final stateFile = File('${dataDirectory.path}/invitation.json');
-    final currentTime = clock().toUtc();
     String invitationCode;
-    DateTime createdAt;
     if (await stateFile.exists()) {
       final decoded = jsonDecode(await stateFile.readAsString());
-      if (decoded is! Map<String, dynamic> ||
-          decoded['code'] is! String ||
-          decoded['createdAt'] is! String) {
+      if (decoded is! Map<String, dynamic> || decoded['code'] is! String) {
         throw const FormatException('Stored invitation state is invalid.');
       }
       invitationCode = decoded['code'] as String;
-      createdAt = DateTime.parse(decoded['createdAt'] as String).toUtc();
-      if (currentTime.difference(createdAt) >= weeklyInvitationLifetime ||
-          currentTime.isBefore(createdAt)) {
-        invitationCode = _makeCode(randomSource);
-        createdAt = currentTime;
-      }
     } else {
       invitationCode = _makeCode(randomSource);
-      createdAt = currentTime;
     }
     final store = AccessControlStore._(
       dataDirectory: dataDirectory,
       now: clock,
-      random: randomSource,
       invitationCode: invitationCode,
-      invitationCreatedAt: createdAt,
     );
     await store._persistInvitation();
     await store._loadUsageForCurrentDay();
@@ -86,35 +63,17 @@ final class AccessControlStore {
   }
 
   bool isInvitationValid(String? candidate) {
-    if (candidate == null || candidate.length != _invitationCode.length) {
-      return false;
-    }
+    if (candidate == null) return false;
     var difference = 0;
     final candidateBytes = utf8.encode(candidate);
     final expectedBytes = utf8.encode(_invitationCode);
+    difference |= candidateBytes.length ^ expectedBytes.length;
     for (var index = 0; index < expectedBytes.length; index++) {
-      difference |= candidateBytes[index] ^ expectedBytes[index];
+      difference |=
+          expectedBytes[index] ^
+          (index < candidateBytes.length ? candidateBytes[index] : 0);
     }
-    return difference == 0 && now().toUtc().isBefore(invitationExpiresAt);
-  }
-
-  Future<bool> rotateInvitationIfExpired() async {
-    final currentTime = now().toUtc();
-    if (currentTime.isBefore(invitationExpiresAt) &&
-        !currentTime.isBefore(_invitationCreatedAt)) {
-      return false;
-    }
-    return _serialize(() async {
-      final refreshedTime = now().toUtc();
-      if (refreshedTime.isBefore(invitationExpiresAt) &&
-          !refreshedTime.isBefore(_invitationCreatedAt)) {
-        return false;
-      }
-      _invitationCode = _makeCode(_random);
-      _invitationCreatedAt = refreshedTime;
-      await _persistInvitation();
-      return true;
-    });
+    return difference == 0;
   }
 
   Future<bool> consumeHeavyOperation(
@@ -180,17 +139,14 @@ final class AccessControlStore {
       File('${dataDirectory.path}/usage-${_dayName(day)}.txt');
 
   Future<void> _persistInvitation() async {
-    final state = jsonEncode({
-      'code': _invitationCode,
-      'createdAt': _invitationCreatedAt.toIso8601String(),
-    });
+    final state = jsonEncode({'code': _invitationCode});
     await _writePrivateFile(
       File('${dataDirectory.path}/invitation.json'),
       state,
     );
     await _writePrivateFile(
       File('${dataDirectory.path}/invitation-code.txt'),
-      '$_invitationCode\nExpires: ${invitationExpiresAt.toIso8601String()}\n',
+      '$_invitationCode\n',
     );
   }
 

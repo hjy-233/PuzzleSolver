@@ -41,14 +41,10 @@ Future<void> main() async {
     dataDirectory: Directory(_accessControlDataDirectory),
   );
   stdout.writeln(
-    'Weekly PuzzleSolver invitation code: '
-    '${_accessControlStore.currentInvitationCode} '
-    '(expires ${_accessControlStore.invitationExpiresAt.toIso8601String()})',
+    'Permanent PuzzleSolver API Bearer code: '
+    '${_accessControlStore.currentInvitationCode}',
   );
   final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-  Timer.periodic(const Duration(minutes: 1), (_) {
-    unawaited(_rotateInvitationCodeIfNeeded());
-  });
   await for (final request in server) {
     unawaited(_serve(request));
   }
@@ -129,7 +125,7 @@ Future<void> _serveApi(HttpRequest request) async {
     );
     request.response.headers.set(
       'Access-Control-Allow-Headers',
-      'Content-Type',
+      'Content-Type, Authorization',
     );
   }
   if (request.method == 'OPTIONS') {
@@ -146,29 +142,30 @@ Future<void> _serveApi(HttpRequest request) async {
 
   final clientAddress = _clientAddress(request);
   final isHeavyOperation = _isHeavyOperation(request.uri.path);
-  final invitedHeavyOperation =
-      isHeavyOperation &&
-      _accessControlStore.isInvitationValid(
-        _cookieValue(request, 'puzzle_invite'),
-      );
   final requestLimit = switch (request.uri.path) {
     '/api/puzzles/slitherlink/generate' => 4,
     '/api/puzzles/slitherlink/solve' => 4,
     '/api/puzzles/slitherlink/check' => 120,
     _ => 30,
   };
-  final retryAfter = invitedHeavyOperation
-      ? null
-      : _apiRateLimiter.retryAfter(
-          clientAddress,
-          request.uri.path,
-          requestLimit,
-        );
+  final retryAfter = _apiRateLimiter.retryAfter(
+    clientAddress,
+    request.uri.path,
+    requestLimit,
+  );
   if (retryAfter != null) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '$retryAfter');
     await _writeJson(request.response, HttpStatus.tooManyRequests, {
       'code': 'rate_limited',
       'error': 'Too many requests. Please retry later.',
+    });
+    return;
+  }
+  final bearerToken = _bearerToken(request);
+  if (!_accessControlStore.isInvitationValid(bearerToken)) {
+    await _writeJson(request.response, HttpStatus.unauthorized, {
+      'code': 'invalid_invitation',
+      'error': 'A valid Bearer invitation code is required.',
     });
     return;
   }
@@ -192,18 +189,13 @@ Future<void> _serveApi(HttpRequest request) async {
   _activeApiRequests++;
   if (isHeavyOperation) _activeHeavyOperations++;
   try {
-    await _rotateInvitationCodeIfNeeded();
     final body = await _readJsonObject(request);
     final path = request.uri.path;
-    if (path == '/api/access/redeem') {
-      await _redeemInvitation(request, body);
-      return;
-    }
     if (_isHeavyOperation(path)) {
       _validateHeavyOperation(path, body);
       final allowed = await _accessControlStore.consumeHeavyOperation(
         clientAddress,
-        invited: invitedHeavyOperation,
+        invited: true,
       );
       if (!allowed) {
         await _writeJson(request.response, HttpStatus.tooManyRequests, {
@@ -271,20 +263,6 @@ bool _isGenerationConvergenceError(Object error) => error.toString().contains(
   'Could not generate a unique irregular Slitherlink puzzle.',
 );
 
-Future<void> _rotateInvitationCodeIfNeeded() async {
-  try {
-    if (await _accessControlStore.rotateInvitationIfExpired()) {
-      stdout.writeln(
-        'Weekly PuzzleSolver invitation code: '
-        '${_accessControlStore.currentInvitationCode} '
-        '(expires ${_accessControlStore.invitationExpiresAt.toIso8601String()})',
-      );
-    }
-  } catch (error) {
-    stderr.writeln('Could not rotate PuzzleSolver invitation code: $error');
-  }
-}
-
 bool _isHeavyOperation(String path) =>
     path == '/api/puzzles/slitherlink/generate' ||
     path == '/api/puzzles/slitherlink/solve';
@@ -323,45 +301,16 @@ void _validateHeavyOperation(String path, Map<String, Object?> body) {
   }
 }
 
-Future<void> _redeemInvitation(
-  HttpRequest request,
-  Map<String, Object?> body,
-) async {
-  final code = body['code'];
-  if (code is! String || !_accessControlStore.isInvitationValid(code)) {
-    await _writeJson(request.response, HttpStatus.forbidden, {
-      'code': 'invalid_invitation',
-      'error': 'The invitation code is invalid or expired.',
-    });
-    return;
+String? _bearerToken(HttpRequest request) {
+  final authorization = request.headers.value(HttpHeaders.authorizationHeader);
+  if (authorization == null) return null;
+  final separator = authorization.indexOf(' ');
+  if (separator < 0 ||
+      authorization.substring(0, separator).toLowerCase() != 'bearer') {
+    return null;
   }
-  final remaining = _accessControlStore.invitationExpiresAt
-      .difference(DateTime.now().toUtc())
-      .inSeconds;
-  final origin = Uri.tryParse(request.headers.value('origin') ?? '');
-  final cloudflareVisitor = request.headers.value('cf-visitor') ?? '';
-  final isSecure =
-      origin?.scheme == 'https' || cloudflareVisitor.contains('https');
-  final cookie = StringBuffer()
-    ..write(
-      'puzzle_invite=$code; Max-Age=$remaining; Path=/; HttpOnly; SameSite=Lax',
-    );
-  if (isSecure) cookie.write('; Secure');
-  request.response.headers.add(HttpHeaders.setCookieHeader, cookie.toString());
-  await _writeJson(request.response, HttpStatus.ok, {
-    'authorized': true,
-    'expiresAt': _accessControlStore.invitationExpiresAt.toIso8601String(),
-  });
-}
-
-String? _cookieValue(HttpRequest request, String name) {
-  final header = request.headers.value(HttpHeaders.cookieHeader);
-  if (header == null) return null;
-  for (final item in header.split(';')) {
-    final parts = item.trim().split('=');
-    if (parts.length == 2 && parts.first == name) return parts.last;
-  }
-  return null;
+  final token = authorization.substring(separator + 1).trim();
+  return token.isEmpty ? null : token;
 }
 
 String _clientAddress(HttpRequest request) {
@@ -432,16 +381,28 @@ Map<String, Object?> _generatePuzzle(Map<String, Object?> body) {
   if (rawClueDensity != null && rawClueDensity is! num) {
     throw const FormatException('Clue density must be a number.');
   }
-  final generated = const SlitherlinkGenerator().generate(
-    SlitherlinkGenerationOptions(
-      rows: rows,
-      columns: columns,
-      difficulty: difficulty,
-      includeBlankCells: body['includeBlankCells'] as bool? ?? true,
-      clueDensity: (rawClueDensity as num?)?.toDouble() ?? 0.55,
-      includeSolveSteps: false,
-    ),
-  );
+  late final GeneratedSlitherlinkPuzzle generated;
+  while (true) {
+    try {
+      generated = const SlitherlinkGenerator().generate(
+        SlitherlinkGenerationOptions(
+          rows: rows,
+          columns: columns,
+          difficulty: difficulty,
+          includeBlankCells: body['includeBlankCells'] as bool? ?? true,
+          clueDensity: (rawClueDensity as num?)?.toDouble() ?? 0.55,
+          includeSolveSteps: false,
+        ),
+      );
+      break;
+    } on StateError catch (error) {
+      if (!error.message.contains(
+        'Could not generate a unique irregular Slitherlink puzzle.',
+      )) {
+        rethrow;
+      }
+    }
+  }
   return {
     'rows': rows,
     'columns': columns,
