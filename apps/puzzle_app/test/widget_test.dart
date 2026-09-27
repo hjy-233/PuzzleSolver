@@ -20,23 +20,86 @@ void main() {
     expect(find.text('提示'), findsOneWidget);
     expect(find.text('自动解题'), findsOneWidget);
     expect(find.text('检查答案'), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.byTooltip('放大棋盘'), findsOneWidget);
+    expect(find.byTooltip('缩小棋盘'), findsOneWidget);
   });
 
-  testWidgets('portrait layout keeps the reasoning section reachable', (
+  testWidgets('portrait layout stays fixed and opens puzzle/settings sheets', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(390, 844);
+    tester.view.physicalSize = const Size(320, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(const PuzzleApp());
 
-    final stepsHeading = find.text('推理步骤 0');
-    await tester.drag(find.byType(ListView).first, const Offset(0, -1200));
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.text('自动解题'), findsOneWidget);
+    expect(find.text('检查'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
+    expect(find.byType(ListView), findsNothing);
+    expect(find.byTooltip('放大棋盘'), findsOneWidget);
+    final boardViewer = find.byType(InteractiveViewer);
+    final transformationController = tester
+        .widget<InteractiveViewer>(boardViewer)
+        .transformationController!;
+    await tester.tap(find.byTooltip('放大棋盘'));
+    await tester.pumpAndSettle();
+    expect(transformationController.value.getMaxScaleOnAxis(), greaterThan(1));
+
+    await tester.tap(find.byTooltip('选择谜题'));
+    await tester.pumpAndSettle();
+    expect(find.text('谜题库'), findsOneWidget);
+    await tester.tap(
+      find.ancestor(
+        of: find.byIcon(Icons.route_outlined),
+        matching: find.byType(ListTile),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(stepsHeading, findsOneWidget);
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('新题设置'), findsOneWidget);
+    expect(find.text('高（行）'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile app bar keeps common actions visible when they fit', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(667, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const PuzzleApp());
+
+    expect(find.byTooltip('分享'), findsOneWidget);
+    expect(find.byTooltip('新题'), findsOneWidget);
+    expect(find.byTooltip('撤销'), findsOneWidget);
+    expect(find.byTooltip('重做'), findsOneWidget);
+    expect(find.byTooltip('更多操作'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('very narrow app bar moves only hidden history actions to menu', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const PuzzleApp());
+
+    expect(find.byTooltip('分享'), findsOneWidget);
+    expect(find.byTooltip('新题'), findsOneWidget);
+    expect(find.byTooltip('撤销'), findsNothing);
+    expect(find.byTooltip('重做'), findsNothing);
+    expect(find.byTooltip('更多操作'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
