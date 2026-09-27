@@ -8,3 +8,6 @@ environment:
 dependencies:
   puzzle_core:
     path: ../packages/puzzle_core
+
+dev_dependencies:
+  test: ^1.26.0
