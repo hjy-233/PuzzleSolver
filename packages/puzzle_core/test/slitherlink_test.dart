@@ -115,6 +115,22 @@ void main() {
     expect(state.stateOf(edge), SlitherlinkEdgeState.empty);
   });
 
+  test('a continuous stroke updates multiple edges in one action', () {
+    const line = EdgeId.horizontal(0, 0);
+    const cross = EdgeId.vertical(0, 0);
+
+    final state = puzzle.reduce(
+      puzzle.initialState,
+      SetSlitherlinkEdges({
+        line: SlitherlinkEdgeState.line,
+        cross: SlitherlinkEdgeState.crossed,
+      }),
+    );
+
+    expect(state.stateOf(line), SlitherlinkEdgeState.line);
+    expect(state.stateOf(cross), SlitherlinkEdgeState.crossed);
+  });
+
   test(
     'generator produces a uniquely solvable puzzle with explainable steps',
     () {
