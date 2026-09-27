@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 const weeklyInvitationLifetime = Duration(days: 7);
-const dailyServerOperationLimit = 5;
+const dailyServerOperationLimit = 1;
 const _maximumTrackedDailyIps = 20000;
 
 /// Persistent weekly invitation and per-IP daily heavy-operation accounting.

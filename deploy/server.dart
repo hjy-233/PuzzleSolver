@@ -145,17 +145,25 @@ Future<void> _serveApi(HttpRequest request) async {
   }
 
   final clientAddress = _clientAddress(request);
+  final isHeavyOperation = _isHeavyOperation(request.uri.path);
+  final invitedHeavyOperation =
+      isHeavyOperation &&
+      _accessControlStore.isInvitationValid(
+        _cookieValue(request, 'puzzle_invite'),
+      );
   final requestLimit = switch (request.uri.path) {
     '/api/puzzles/slitherlink/generate' => 4,
     '/api/puzzles/slitherlink/solve' => 4,
     '/api/puzzles/slitherlink/check' => 120,
     _ => 30,
   };
-  final retryAfter = _apiRateLimiter.retryAfter(
-    clientAddress,
-    request.uri.path,
-    requestLimit,
-  );
+  final retryAfter = invitedHeavyOperation
+      ? null
+      : _apiRateLimiter.retryAfter(
+          clientAddress,
+          request.uri.path,
+          requestLimit,
+        );
   if (retryAfter != null) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '$retryAfter');
     await _writeJson(request.response, HttpStatus.tooManyRequests, {
@@ -172,9 +180,6 @@ Future<void> _serveApi(HttpRequest request) async {
     });
     return;
   }
-  final isHeavyOperation =
-      request.uri.path == '/api/puzzles/slitherlink/generate' ||
-      request.uri.path == '/api/puzzles/slitherlink/solve';
   if (isHeavyOperation && _activeHeavyOperations >= _maximumHeavyOperations) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '5');
     await _writeJson(request.response, HttpStatus.serviceUnavailable, {
@@ -196,12 +201,9 @@ Future<void> _serveApi(HttpRequest request) async {
     }
     if (_isHeavyOperation(path)) {
       _validateHeavyOperation(path, body);
-      final invited = _accessControlStore.isInvitationValid(
-        _cookieValue(request, 'puzzle_invite'),
-      );
       final allowed = await _accessControlStore.consumeHeavyOperation(
         clientAddress,
-        invited: invited,
+        invited: invitedHeavyOperation,
       );
       if (!allowed) {
         await _writeJson(request.response, HttpStatus.tooManyRequests, {
@@ -236,10 +238,26 @@ Future<void> _serveApi(HttpRequest request) async {
       'error': error.message ?? 'Invalid request.',
     });
   } on StateError catch (error) {
+    if (request.uri.path == '/api/puzzles/slitherlink/generate' &&
+        _isGenerationConvergenceError(error)) {
+      await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+        'code': 'generation_failed',
+        'error': 'Server generation did not converge; continuing locally.',
+      });
+      return;
+    }
     await _writeJson(request.response, HttpStatus.unprocessableEntity, {
       'error': error.message,
     });
   } catch (error) {
+    if (request.uri.path == '/api/puzzles/slitherlink/generate' &&
+        _isGenerationConvergenceError(error)) {
+      await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+        'code': 'generation_failed',
+        'error': 'Server generation did not converge; continuing locally.',
+      });
+      return;
+    }
     await _writeJson(request.response, HttpStatus.internalServerError, {
       'error': 'Puzzle processing failed: $error',
     });
@@ -248,6 +266,10 @@ Future<void> _serveApi(HttpRequest request) async {
     if (isHeavyOperation) _activeHeavyOperations--;
   }
 }
+
+bool _isGenerationConvergenceError(Object error) => error.toString().contains(
+  'Could not generate a unique irregular Slitherlink puzzle.',
+);
 
 Future<void> _rotateInvitationCodeIfNeeded() async {
   try {
