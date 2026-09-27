@@ -40,6 +40,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   @override
   void initState() {
     super.initState();
+    final invitationCode = Uri.base.queryParameters['code'];
     final canonicalUrl = Uri.base.replace(path: '/slitherlink');
     if (canonicalUrl.toString() != Uri.base.toString()) {
       BrowserUrl.replace(canonicalUrl);
@@ -71,6 +72,10 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         } else {
           _status = '已从分享链接打开题目。';
         }
+        if (invitationCode != null) {
+          _isBusy = true;
+          unawaited(_redeemInvitationFromUrl(invitationCode));
+        }
         return;
       } on FormatException catch (error) {
         _status = '分享链接无效：${error.message}';
@@ -84,7 +89,16 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       initialState: _puzzle.initialState,
       reducer: _puzzle.reduce,
     );
-    unawaited(_newPuzzle());
+    if (invitationCode == null) {
+      unawaited(_newPuzzle());
+    } else {
+      _isBusy = true;
+      unawaited(
+        _redeemInvitationFromUrl(invitationCode).whenComplete(() {
+          if (mounted) unawaited(_newPuzzle());
+        }),
+      );
+    }
   }
 
   void _replaceWithGeneratedPuzzle(SlitherlinkPuzzle puzzle) {
@@ -123,6 +137,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _isBusy = true;
       _status = '服务器正在生成题目…';
     });
+    var usedBrowserCompute = false;
     try {
       final puzzle = await _api.generate(
         rows: rows,
@@ -130,18 +145,25 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         difficulty: _difficulty,
         includeBlankCells: _includeBlankCells,
         clueDensity: _clueDensity,
+        onLocalFallback: () {
+          usedBrowserCompute = true;
+          if (mounted) {
+            setState(() => _status = '服务器额度已用完，正在使用浏览器算力生成…');
+          }
+        },
       );
       if (!mounted) return;
       setState(() {
         _replaceWithGeneratedPuzzle(puzzle);
         _isBusy = false;
+        if (usedBrowserCompute) _status = '已由浏览器本地生成新题。左键画线，右键打叉。';
       });
       _syncCurrentUrl();
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _isBusy = false;
-        _status = '服务器生成失败：$error';
+        _status = '题目生成失败：$error';
       });
     }
   }
@@ -311,6 +333,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       setState(() => _status = '当前棋盘已经解完。');
       return;
     }
+    var usedBrowserCompute = false;
     try {
       if (_puzzle.clues.isEmpty) {
         setState(() => _status = '先录入题目数字，再自动解题。');
@@ -321,7 +344,16 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _isBusy = true;
         _status = '服务器正在解题…';
       });
-      final result = await _api.solve(_puzzle, _session.state);
+      final result = await _api.solve(
+        _puzzle,
+        _session.state,
+        onLocalFallback: () {
+          usedBrowserCompute = true;
+          if (mounted) {
+            setState(() => _status = '服务器额度已用完，正在使用浏览器算力求解…');
+          }
+        },
+      );
       if (!mounted) return;
       if (!result.hasUniqueSolution) {
         setState(() {
@@ -342,7 +374,9 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _highlights = [];
         _selectedStepIndex = null;
         _isBusy = false;
-        _status = '自动解题完成：${result.steps.length} 个可解释步骤。';
+        _status = usedBrowserCompute
+            ? '已由浏览器本地完成求解：${result.steps.length} 个推理步骤。'
+            : '自动解题完成：${result.steps.length} 个可解释步骤。';
       });
       _syncCurrentUrl();
     } catch (error) {
@@ -357,7 +391,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   Future<void> _check() async {
     setState(() {
       _isBusy = true;
-      _status = '服务器正在检查答案…';
+      _status = '正在本地检查答案…';
     });
     try {
       final result = await _api.check(_puzzle, _session.state);
@@ -461,6 +495,32 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       },
     );
     BrowserUrl.replace(url);
+  }
+
+  Future<void> _redeemInvitationFromUrl(String code) async {
+    final currentUri = Uri.base;
+    final queryParameters = Map<String, String>.from(currentUri.queryParameters)
+      ..remove('code');
+    BrowserUrl.replace(
+      currentUri.replace(
+        path: '/slitherlink',
+        queryParameters: queryParameters.isEmpty ? null : queryParameters,
+      ),
+    );
+    try {
+      await _api.redeemInvitation(code);
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = '邀请码有效，已安全保存在浏览器中，本周无需再次输入。';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _status = '邀请码兑换失败（可能已过期）：$error';
+      });
+    }
   }
 
   Future<void> _share(_ShareMode mode) async {
@@ -850,16 +910,6 @@ class _Controls extends StatelessWidget {
           onChanged: onClueDensityChanged,
         ),
         const Text('基准值为 50%；调高后数字更多、空白格更少。'),
-        FilledButton.icon(
-          onPressed: isBusy ? null : onGenerate,
-          icon: isBusy
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.casino_outlined),
-          label: Text(isBusy ? '服务器正在处理…' : '按此设置生成新题'),
-        ),
         const SizedBox(height: 8),
         if (editingClues)
           OutlinedButton.icon(

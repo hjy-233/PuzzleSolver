@@ -18,7 +18,13 @@
       "protocol": "tcp"
     }
   ],
-  "volumes": [],
+  "volumes": [
+    {
+      "name": "data",
+      "containerPath": "/app/data",
+      "readOnly": false
+    }
+  ],
   "healthCheck": {
     "type": "http",
     "path": "/",

@@ -6,6 +6,8 @@ import 'dart:typed_data';
 
 import 'package:puzzle_core/puzzle_core.dart';
 
+import 'access_control.dart';
+
 const rootDirectory = String.fromEnvironment(
   'PUZZLE_WEB_ROOT',
   defaultValue: '/srv/puzzle-solver',
@@ -15,13 +17,29 @@ const _maximumRequestBytes = 64 * 1024;
 const _maximumActiveApiRequests = 4;
 const _maximumHeavyOperations = 1;
 const _maximumRateLimitKeys = 4096;
+const _accessControlDataDirectory = String.fromEnvironment(
+  'PUZZLE_DATA_DIR',
+  defaultValue: '/app/data',
+);
 
 final _apiRateLimiter = _ApiRateLimiter();
+late final AccessControlStore _accessControlStore;
 var _activeApiRequests = 0;
 var _activeHeavyOperations = 0;
 
 Future<void> main() async {
+  _accessControlStore = await AccessControlStore.open(
+    dataDirectory: Directory(_accessControlDataDirectory),
+  );
+  stdout.writeln(
+    'Weekly PuzzleSolver invitation code: '
+    '${_accessControlStore.currentInvitationCode} '
+    '(expires ${_accessControlStore.invitationExpiresAt.toIso8601String()})',
+  );
   final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
+  Timer.periodic(const Duration(minutes: 1), (_) {
+    unawaited(_rotateInvitationCodeIfNeeded());
+  });
   await for (final request in server) {
     unawaited(_serve(request));
   }
@@ -54,8 +72,9 @@ Future<void> _serve(HttpRequest request) async {
   request.response.headers.contentType = _contentTypeFor(file.path);
   request.response.headers.set(
     HttpHeaders.cacheControlHeader,
-    'public, max-age=300',
+    file.path.endsWith('.html') ? 'no-store' : 'public, max-age=300',
   );
+  request.response.headers.set('Referrer-Policy', 'no-referrer');
   if (request.method == 'HEAD') {
     await request.response.close();
     return;
@@ -104,6 +123,7 @@ Future<void> _serveApi(HttpRequest request) async {
   if (retryAfter != null) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '$retryAfter');
     await _writeJson(request.response, HttpStatus.tooManyRequests, {
+      'code': 'rate_limited',
       'error': 'Too many requests. Please retry later.',
     });
     return;
@@ -111,6 +131,7 @@ Future<void> _serveApi(HttpRequest request) async {
   if (_activeApiRequests >= _maximumActiveApiRequests) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '2');
     await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+      'code': 'server_busy',
       'error': 'The server is busy. Please retry shortly.',
     });
     return;
@@ -121,6 +142,7 @@ Future<void> _serveApi(HttpRequest request) async {
   if (isHeavyOperation && _activeHeavyOperations >= _maximumHeavyOperations) {
     request.response.headers.set(HttpHeaders.retryAfterHeader, '5');
     await _writeJson(request.response, HttpStatus.serviceUnavailable, {
+      'code': 'server_busy',
       'error': 'A puzzle operation is already running. Please retry shortly.',
     });
     return;
@@ -129,8 +151,30 @@ Future<void> _serveApi(HttpRequest request) async {
   _activeApiRequests++;
   if (isHeavyOperation) _activeHeavyOperations++;
   try {
+    await _rotateInvitationCodeIfNeeded();
     final body = await _readJsonObject(request);
     final path = request.uri.path;
+    if (path == '/api/access/redeem') {
+      await _redeemInvitation(request, body);
+      return;
+    }
+    if (_isHeavyOperation(path)) {
+      _validateHeavyOperation(path, body);
+      final invited = _accessControlStore.isInvitationValid(
+        _cookieValue(request, 'puzzle_invite'),
+      );
+      final allowed = await _accessControlStore.consumeHeavyOperation(
+        clientAddress,
+        invited: invited,
+      );
+      if (!allowed) {
+        await _writeJson(request.response, HttpStatus.tooManyRequests, {
+          'code': 'daily_quota_exceeded',
+          'error': 'The daily server allowance is used. Continue locally.',
+        });
+        return;
+      }
+    }
     final payload = await Isolate.run(() => _dispatchApi(path, body));
     if (payload == null) {
       await _writeJson(request.response, HttpStatus.notFound, {
@@ -167,6 +211,99 @@ Future<void> _serveApi(HttpRequest request) async {
     _activeApiRequests--;
     if (isHeavyOperation) _activeHeavyOperations--;
   }
+}
+
+Future<void> _rotateInvitationCodeIfNeeded() async {
+  try {
+    if (await _accessControlStore.rotateInvitationIfExpired()) {
+      stdout.writeln(
+        'Weekly PuzzleSolver invitation code: '
+        '${_accessControlStore.currentInvitationCode} '
+        '(expires ${_accessControlStore.invitationExpiresAt.toIso8601String()})',
+      );
+    }
+  } catch (error) {
+    stderr.writeln('Could not rotate PuzzleSolver invitation code: $error');
+  }
+}
+
+bool _isHeavyOperation(String path) =>
+    path == '/api/puzzles/slitherlink/generate' ||
+    path == '/api/puzzles/slitherlink/solve';
+
+void _validateHeavyOperation(String path, Map<String, Object?> body) {
+  if (path == '/api/puzzles/slitherlink/solve') {
+    final puzzle = _parsePuzzle(body);
+    _parseState(body, puzzle.topology);
+    return;
+  }
+  final rows = _requiredInt(body, 'rows');
+  final columns = _requiredInt(body, 'columns');
+  if (rows < 1 ||
+      columns < 1 ||
+      rows > 100 ||
+      columns > 100 ||
+      rows * columns > 100) {
+    throw const FormatException(
+      'Board dimensions must be positive and at most 100 cells.',
+    );
+  }
+  final difficulty = body['difficulty'];
+  if (difficulty != null &&
+      (difficulty is! String ||
+          !{'easy', 'normal', 'hard'}.contains(difficulty))) {
+    throw const FormatException('Unknown difficulty.');
+  }
+  final includeBlankCells = body['includeBlankCells'];
+  if (includeBlankCells != null && includeBlankCells is! bool) {
+    throw const FormatException('includeBlankCells must be a boolean.');
+  }
+  final density = body['clueDensity'];
+  if (density != null &&
+      (density is! num || !density.isFinite || density < 0 || density > 1)) {
+    throw const FormatException('Clue density must be between 0 and 1.');
+  }
+}
+
+Future<void> _redeemInvitation(
+  HttpRequest request,
+  Map<String, Object?> body,
+) async {
+  final code = body['code'];
+  if (code is! String || !_accessControlStore.isInvitationValid(code)) {
+    await _writeJson(request.response, HttpStatus.forbidden, {
+      'code': 'invalid_invitation',
+      'error': 'The invitation code is invalid or expired.',
+    });
+    return;
+  }
+  final remaining = _accessControlStore.invitationExpiresAt
+      .difference(DateTime.now().toUtc())
+      .inSeconds;
+  final origin = Uri.tryParse(request.headers.value('origin') ?? '');
+  final cloudflareVisitor = request.headers.value('cf-visitor') ?? '';
+  final isSecure =
+      origin?.scheme == 'https' || cloudflareVisitor.contains('https');
+  final cookie = StringBuffer()
+    ..write(
+      'puzzle_invite=$code; Max-Age=$remaining; Path=/; HttpOnly; SameSite=Lax',
+    );
+  if (isSecure) cookie.write('; Secure');
+  request.response.headers.add(HttpHeaders.setCookieHeader, cookie.toString());
+  await _writeJson(request.response, HttpStatus.ok, {
+    'authorized': true,
+    'expiresAt': _accessControlStore.invitationExpiresAt.toIso8601String(),
+  });
+}
+
+String? _cookieValue(HttpRequest request, String name) {
+  final header = request.headers.value(HttpHeaders.cookieHeader);
+  if (header == null) return null;
+  for (final item in header.split(';')) {
+    final parts = item.trim().split('=');
+    if (parts.length == 2 && parts.first == name) return parts.last;
+  }
+  return null;
 }
 
 String _clientAddress(HttpRequest request) {
