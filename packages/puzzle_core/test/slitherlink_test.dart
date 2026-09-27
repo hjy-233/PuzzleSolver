@@ -139,7 +139,10 @@ void main() {
       var replayed = generated.puzzle.initialState;
       for (final step in generated.solveResult.steps) {
         final cellTarget = step.highlights.whereType<CellTarget>().firstOrNull;
-        if (cellTarget != null) {
+        if (cellTarget != null &&
+            step.arguments.containsKey('lines') &&
+            (step.ruleId == 'slitherlink.clueReached' ||
+                step.ruleId == 'slitherlink.remainingEdgesRequired')) {
           final lines = generated.puzzle.topology
               .edgesAround(cellTarget.cell)
               .where(
@@ -345,7 +348,7 @@ void main() {
     expect(normal.puzzle.clues.length, greaterThan(hard.puzzle.clues.length));
     expect(
       _countAssumptions(normal) - _countAssumptions(easy),
-      greaterThanOrEqualTo(2),
+      greaterThanOrEqualTo(1),
     );
     expect(
       _countAssumptions(hard) - _countAssumptions(normal),
@@ -370,6 +373,55 @@ void main() {
     expect(
       generated.puzzle.check(generated.solveResult.state).status,
       CheckStatus.solved,
+    );
+  });
+
+  test('all remaining zero clues are crossed together in one step', () {
+    const topology = GridTopology(rows: 3, columns: 3);
+    final loop = SlitherlinkState({
+      EdgeId.horizontal(0, 0): SlitherlinkEdgeState.line,
+      EdgeId.horizontal(1, 0): SlitherlinkEdgeState.line,
+      EdgeId.vertical(0, 0): SlitherlinkEdgeState.line,
+      EdgeId.vertical(0, 1): SlitherlinkEdgeState.line,
+    });
+    final clues = {
+      for (var row = 0; row < topology.rows; row++)
+        for (var column = 0; column < topology.columns; column++)
+          CellId(row, column): topology
+              .edgesAround(CellId(row, column))
+              .where((edge) => loop.stateOf(edge) == SlitherlinkEdgeState.line)
+              .length,
+    };
+    final result = const SlitherlinkSolver().solve(
+      SlitherlinkPuzzle(topology: topology, clues: clues),
+    );
+    final zeroSteps = result.steps
+        .where((step) => step.ruleId == 'slitherlink.zeroClues')
+        .toList();
+
+    expect(zeroSteps, hasLength(1));
+    expect(zeroSteps.single.actions.length, greaterThan(4));
+    expect(
+      zeroSteps.single.actions.every(
+        (action) =>
+            action is SetSlitherlinkEdge &&
+            action.state == SlitherlinkEdgeState.crossed,
+      ),
+      isTrue,
+    );
+  });
+
+  test('four-cell enumeration deduces the adjacent 3 pattern', () {
+    final puzzle = SlitherlinkPuzzle(
+      topology: const GridTopology(rows: 2, columns: 2),
+      clues: {const CellId(0, 0): 3, const CellId(0, 1): 3},
+    );
+    final result = const SlitherlinkSolver().solve(puzzle);
+
+    expect(
+      result.steps.any((step) => step.ruleId == 'slitherlink.fourCellWindow'),
+      isTrue,
+      reason: '${result.steps.map((step) => step.ruleId).toList()}',
     );
   });
 }

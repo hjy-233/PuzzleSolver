@@ -670,11 +670,15 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     return switch (step.ruleId) {
       'slitherlink.clueReached' => '此格数字已满足 · $changes',
       'slitherlink.remainingEdgesRequired' => '此格剩余边都要连线 · $changes',
+      'slitherlink.zeroClues' => '所有 0 格周围的边都不能画线 · $changes',
       'slitherlink.vertexDegree' =>
         step.arguments['lines'] == 2
             ? '交点已有两条线，不能再接 · $changes'
             : '避免交点分叉或断开 · $changes',
       'slitherlink.preventOpenEnd' => '线经过此交点必须延续 · $changes',
+      'slitherlink.insideOutside' => '根据区域内外关系确定这些边 · $changes',
+      'slitherlink.fourCellWindow' => '比较这片四格区域的所有走法，找出共同边 · $changes',
+      'slitherlink.loopClosed' => '单回路已闭合且满足数字，其余边都不能画线 · $changes',
       'slitherlink.assumptionContradiction' =>
         '反向尝试无法完成整圈 · 所以${_edgeStateName(step.arguments['result'])} · $changes',
       _ => changes,
@@ -713,8 +717,12 @@ enum _ShareMode { puzzlePage, puzzle, puzzleAndProgress }
 String _stepTitle(SolveStep<SlitherlinkAction> step) => switch (step.ruleId) {
   'slitherlink.clueReached' => '数字满足',
   'slitherlink.remainingEdgesRequired' => '必须画线',
+  'slitherlink.zeroClues' => '0 格批量排除',
   'slitherlink.vertexDegree' => '交点规则',
   'slitherlink.preventOpenEnd' => '避免断线',
+  'slitherlink.insideOutside' => '区域内外关系',
+  'slitherlink.fourCellWindow' => '四格组合推理',
+  'slitherlink.loopClosed' => '单回路完成',
   'slitherlink.assumptionContradiction' => '排除一边',
   _ => '推理',
 };
