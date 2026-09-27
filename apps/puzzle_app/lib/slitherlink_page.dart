@@ -35,11 +35,15 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   bool _includeBlankCells = true;
   double _clueDensity = 0.55;
   bool _isBusy = false;
+  bool _completionDialogOpen = false;
+  bool _completionDialogDismissed = false;
+  bool _hasServerInvitation = false;
   String _status = '左键画线，右键打叉。';
 
   @override
   void initState() {
     super.initState();
+    _hasServerInvitation = _storedInvitationIsActive();
     final invitationCode = Uri.base.queryParameters['code'];
     final canonicalUrl = Uri.base.replace(path: '/slitherlink');
     if (canonicalUrl.toString() != Uri.base.toString()) {
@@ -135,7 +139,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     _cancelHighlightFlash();
     setState(() {
       _isBusy = true;
-      _status = '服务器正在生成题目…';
+      _status = _hasServerInvitation ? '服务器正在生成题目…' : '正在本地生成题目…';
     });
     var usedBrowserCompute = false;
     try {
@@ -145,6 +149,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         difficulty: _difficulty,
         includeBlankCells: _includeBlankCells,
         clueDensity: _clueDensity,
+        useServer: _hasServerInvitation,
         onLocalFallback: () {
           usedBrowserCompute = true;
           if (mounted) {
@@ -156,7 +161,9 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       setState(() {
         _replaceWithGeneratedPuzzle(puzzle);
         _isBusy = false;
-        if (usedBrowserCompute) _status = '已由浏览器本地生成新题。左键画线，右键打叉。';
+        if (usedBrowserCompute || !_hasServerInvitation) {
+          _status = '已由浏览器本地生成新题。左键画线，右键打叉。';
+        }
       });
       _syncCurrentUrl();
     } catch (error) {
@@ -305,6 +312,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _status = gesture == PointerGesture.primaryTap ? '已画线。' : '已标记为不可能。';
     });
     _syncCurrentUrl();
+    unawaited(_showCompletionDialogIfSolved());
   }
 
   void _showHint() {
@@ -326,6 +334,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _status = _explanationFor(step);
     });
     _syncCurrentUrl();
+    unawaited(_showCompletionDialogIfSolved());
   }
 
   Future<void> _solve() async {
@@ -342,11 +351,12 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       final baseState = _steps.isEmpty ? _session.state : null;
       setState(() {
         _isBusy = true;
-        _status = '服务器正在解题…';
+        _status = _hasServerInvitation ? '服务器正在解题…' : '正在本地解题…';
       });
       final result = await _api.solve(
         _puzzle,
         _session.state,
+        useServer: _hasServerInvitation,
         onLocalFallback: () {
           usedBrowserCompute = true;
           if (mounted) {
@@ -374,11 +384,12 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _highlights = [];
         _selectedStepIndex = null;
         _isBusy = false;
-        _status = usedBrowserCompute
+        _status = usedBrowserCompute || !_hasServerInvitation
             ? '已由浏览器本地完成求解：${result.steps.length} 个推理步骤。'
             : '自动解题完成：${result.steps.length} 个可解释步骤。';
       });
       _syncCurrentUrl();
+      unawaited(_showCompletionDialogIfSolved());
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -404,6 +415,9 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
           CheckStatus.incomplete => '还没有完成；可以继续推理或使用提示。',
         };
       });
+      if (result.status == CheckStatus.solved) {
+        unawaited(_showCompletionDialogIfSolved());
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -443,6 +457,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _status = '已重做一步。';
     });
     _syncCurrentUrl();
+    unawaited(_showCompletionDialogIfSolved());
   }
 
   void _replayToStep(int index) {
@@ -473,6 +488,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       _status = '步骤 $actionCount：${_explanationFor(_steps[index])}';
     });
     _syncCurrentUrl();
+    unawaited(_showCompletionDialogIfSolved());
     _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
       if (!mounted) {
         return;
@@ -484,6 +500,57 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   void _cancelHighlightFlash() {
     _highlightTimer?.cancel();
     _highlightTimer = null;
+  }
+
+  Future<void> _showCompletionDialogIfSolved() async {
+    if (_puzzle.check(_session.state).status != CheckStatus.solved) {
+      _completionDialogDismissed = false;
+      return;
+    }
+    if (_completionDialogOpen || _completionDialogDismissed) {
+      return;
+    }
+    _completionDialogOpen = true;
+    final startNewPuzzle = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('谜题完成！'),
+        content: const Text('恭喜，你完成了这道数回。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('新题'),
+          ),
+        ],
+      ),
+    );
+    _completionDialogOpen = false;
+    if (!mounted) return;
+    if (startNewPuzzle == true) {
+      _completionDialogDismissed = false;
+      unawaited(_newPuzzle());
+    } else {
+      _completionDialogDismissed = true;
+    }
+  }
+
+  bool _storedInvitationIsActive() {
+    try {
+      final storedExpiry = BrowserUrl.readLocalValue(
+        'puzzle_server_access_expires_at',
+      );
+      final expiry = storedExpiry == null
+          ? null
+          : DateTime.tryParse(storedExpiry);
+      return expiry != null && expiry.isAfter(DateTime.now().toUtc());
+    } on Object {
+      return false;
+    }
   }
 
   void _syncCurrentUrl() {
@@ -508,9 +575,14 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       ),
     );
     try {
-      await _api.redeemInvitation(code);
+      final expiresAt = await _api.redeemInvitation(code);
+      BrowserUrl.writeLocalValue(
+        'puzzle_server_access_expires_at',
+        expiresAt.toUtc().toIso8601String(),
+      );
       if (!mounted) return;
       setState(() {
+        _hasServerInvitation = true;
         _isBusy = false;
         _status = '邀请码有效，已安全保存在浏览器中，本周无需再次输入。';
       });
@@ -755,7 +827,10 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     ),
   );
 
-  _Controls _buildControls({bool settingsOnly = false}) => _Controls(
+  _Controls _buildControls({
+    bool settingsOnly = false,
+    VoidCallback? refreshSettings,
+  }) => _Controls(
     onHint: _showHint,
     onSolve: _solve,
     onCheck: _check,
@@ -765,12 +840,26 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     difficulty: _difficulty,
     includeBlankCells: _includeBlankCells,
     clueDensity: _clueDensity,
-    onRowsChanged: (value) => _updateDimension(value, rows: true),
-    onColumnsChanged: (value) => _updateDimension(value, rows: false),
-    onDifficultyChanged: (value) => setState(() => _difficulty = value),
-    onIncludeBlankCellsChanged: (value) =>
-        setState(() => _includeBlankCells = value),
-    onClueDensityChanged: (value) => setState(() => _clueDensity = value),
+    onRowsChanged: (value) {
+      _updateDimension(value, rows: true);
+      refreshSettings?.call();
+    },
+    onColumnsChanged: (value) {
+      _updateDimension(value, rows: false);
+      refreshSettings?.call();
+    },
+    onDifficultyChanged: (value) {
+      setState(() => _difficulty = value);
+      refreshSettings?.call();
+    },
+    onIncludeBlankCellsChanged: (value) {
+      setState(() => _includeBlankCells = value);
+      refreshSettings?.call();
+    },
+    onClueDensityChanged: (value) {
+      setState(() => _clueDensity = value);
+      refreshSettings?.call();
+    },
     onGenerate: () => unawaited(_newPuzzle()),
     onManualEntry: _startManualEntry,
     onFinishManualEntry: _finishManualEntry,
@@ -784,9 +873,14 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (context) => FractionallySizedBox(
-        heightFactor: .9,
-        child: _buildControls(settingsOnly: true),
+      builder: (context) => StatefulBuilder(
+        builder: (context, refreshSettings) => FractionallySizedBox(
+          heightFactor: .9,
+          child: _buildControls(
+            settingsOnly: true,
+            refreshSettings: () => refreshSettings(() {}),
+          ),
+        ),
       ),
     );
   }

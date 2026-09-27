@@ -13,6 +13,7 @@ final class SlitherlinkApi {
     required PuzzleDifficulty difficulty,
     required bool includeBlankCells,
     required double clueDensity,
+    required bool useServer,
     VoidCallback? onLocalFallback,
   }) async {
     final request = <String, Object?>{
@@ -23,12 +24,16 @@ final class SlitherlinkApi {
       'clueDensity': clueDensity,
     };
     late final Map<String, dynamic> response;
-    try {
-      response = await _post('/api/puzzles/slitherlink/generate', request);
-    } on _UseBrowserCompute {
-      onLocalFallback?.call();
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!useServer) {
       response = await compute(_generateLocally, request);
+    } else {
+      try {
+        response = await _post('/api/puzzles/slitherlink/generate', request);
+      } on _UseBrowserCompute {
+        onLocalFallback?.call();
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        response = await compute(_generateLocally, request);
+      }
     }
     return _parsePuzzle(response);
   }
@@ -36,6 +41,7 @@ final class SlitherlinkApi {
   Future<SlitherlinkSolveResult> solve(
     SlitherlinkPuzzle puzzle,
     SlitherlinkState state, {
+    required bool useServer,
     VoidCallback? onLocalFallback,
   }) async {
     final request = <String, Object?>{
@@ -43,12 +49,16 @@ final class SlitherlinkApi {
       'edges': _serializeState(state),
     };
     late final Map<String, dynamic> response;
-    try {
-      response = await _post('/api/puzzles/slitherlink/solve', request);
-    } on _UseBrowserCompute {
-      onLocalFallback?.call();
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!useServer) {
       response = await compute(_solveLocally, request);
+    } else {
+      try {
+        response = await _post('/api/puzzles/slitherlink/solve', request);
+      } on _UseBrowserCompute {
+        onLocalFallback?.call();
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        response = await compute(_solveLocally, request);
+      }
     }
     final solution = _parseState(response['state'], puzzle.topology);
     final steps = (response['steps'] as List<dynamic>)
@@ -66,11 +76,20 @@ final class SlitherlinkApi {
     SlitherlinkState state,
   ) async => puzzle.check(state);
 
-  Future<void> redeemInvitation(String code) async {
+  Future<DateTime> redeemInvitation(String code) async {
     final response = await _post('/api/access/redeem', {'code': code});
     if (response['authorized'] != true) {
       throw const FormatException('邀请码验证失败。');
     }
+    final expiresAt = response['expiresAt'];
+    if (expiresAt is! String) {
+      throw const FormatException('服务器没有返回邀请码有效期。');
+    }
+    final expiration = DateTime.tryParse(expiresAt);
+    if (expiration == null) {
+      throw const FormatException('服务器返回的邀请码有效期无效。');
+    }
+    return expiration;
   }
 
   Future<Map<String, dynamic>> _post(
