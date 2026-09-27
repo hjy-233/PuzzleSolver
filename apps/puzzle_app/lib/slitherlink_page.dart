@@ -38,7 +38,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   bool _isBusy = false;
   bool _completionDialogOpen = false;
   bool _completionDialogDismissed = false;
-  bool _hasServerInvitation = false;
   bool _stepsVisible = true;
   bool _puzzleSidebarVisible = true;
   bool _controlsSidebarVisible = true;
@@ -47,9 +46,12 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   @override
   void initState() {
     super.initState();
-    _hasServerInvitation = _storedInvitationIsActive();
-    final invitationCode = Uri.base.queryParameters['code'];
-    final canonicalUrl = Uri.base.replace(path: '/slitherlink');
+    final queryParameters = Map<String, String>.from(Uri.base.queryParameters)
+      ..remove('code');
+    final canonicalUrl = Uri.base.replace(
+      path: '/slitherlink',
+      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+    );
     if (canonicalUrl.toString() != Uri.base.toString()) {
       BrowserUrl.replace(canonicalUrl);
     }
@@ -80,10 +82,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         } else {
           _status = '已从分享链接打开题目。';
         }
-        if (invitationCode != null) {
-          _isBusy = true;
-          unawaited(_redeemInvitationFromUrl(invitationCode));
-        }
         return;
       } on FormatException catch (error) {
         _status = '分享链接无效：${error.message}';
@@ -97,16 +95,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       initialState: _puzzle.initialState,
       reducer: _puzzle.reduce,
     );
-    if (invitationCode == null) {
-      unawaited(_newPuzzle());
-    } else {
-      _isBusy = true;
-      unawaited(
-        _redeemInvitationFromUrl(invitationCode).whenComplete(() {
-          if (mounted) unawaited(_newPuzzle());
-        }),
-      );
-    }
+    unawaited(_newPuzzle());
   }
 
   void _replaceWithGeneratedPuzzle(SlitherlinkPuzzle puzzle) {
@@ -143,9 +132,8 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     _cancelHighlightFlash();
     setState(() {
       _isBusy = true;
-      _status = _hasServerInvitation ? '服务器正在生成题目…' : '正在本地生成题目…';
+      _status = '正在浏览器本地生成题目…';
     });
-    var usedBrowserCompute = false;
     try {
       final puzzle = await _api.generate(
         rows: rows,
@@ -153,21 +141,17 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         difficulty: _difficulty,
         includeBlankCells: _includeBlankCells,
         clueDensity: _clueDensity,
-        useServer: _hasServerInvitation,
-        onLocalFallback: () {
-          usedBrowserCompute = true;
-          if (mounted) {
-            setState(() => _status = '服务器额度已用完，正在使用浏览器算力生成…');
-          }
+        useServer: false,
+        onRetry: (attempts) {
+          if (!mounted) return;
+          setState(() => _status = '浏览器本地生成中，已重试 $attempts 次…');
         },
       );
       if (!mounted) return;
       setState(() {
         _replaceWithGeneratedPuzzle(puzzle);
         _isBusy = false;
-        if (usedBrowserCompute || !_hasServerInvitation) {
-          _status = '已由浏览器本地生成新题。左键画线，右键打叉。';
-        }
+        _status = '已由浏览器本地生成新题。左键画线，右键打叉。';
       });
       _syncCurrentUrl();
     } catch (error) {
@@ -365,7 +349,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       setState(() => _status = '当前棋盘已经解完。');
       return;
     }
-    var usedBrowserCompute = false;
     try {
       if (_puzzle.clues.isEmpty) {
         setState(() => _status = '先录入题目数字，再自动解题。');
@@ -374,18 +357,12 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       final baseState = _steps.isEmpty ? _session.state : null;
       setState(() {
         _isBusy = true;
-        _status = _hasServerInvitation ? '服务器正在解题…' : '正在本地解题…';
+        _status = '正在浏览器后台自动解题…';
       });
       final result = await _api.solve(
         _puzzle,
         _session.state,
-        useServer: _hasServerInvitation,
-        onLocalFallback: () {
-          usedBrowserCompute = true;
-          if (mounted) {
-            setState(() => _status = '服务器额度已用完，正在使用浏览器算力求解…');
-          }
-        },
+        useServer: false,
       );
       if (!mounted) return;
       if (!result.hasUniqueSolution) {
@@ -407,9 +384,7 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
         _highlights = [];
         _selectedStepIndex = null;
         _isBusy = false;
-        _status = usedBrowserCompute || !_hasServerInvitation
-            ? '已由浏览器本地完成求解：${result.steps.length} 个推理步骤。'
-            : '自动解题完成：${result.steps.length} 个可解释步骤。';
+        _status = '已由浏览器本地完成求解：${result.steps.length} 个推理步骤。';
       });
       _syncCurrentUrl();
       unawaited(_showCompletionDialogIfSolved());
@@ -562,20 +537,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     }
   }
 
-  bool _storedInvitationIsActive() {
-    try {
-      final storedExpiry = BrowserUrl.readLocalValue(
-        'puzzle_server_access_expires_at',
-      );
-      final expiry = storedExpiry == null
-          ? null
-          : DateTime.tryParse(storedExpiry);
-      return expiry != null && expiry.isAfter(DateTime.now().toUtc());
-    } on Object {
-      return false;
-    }
-  }
-
   void _syncCurrentUrl() {
     final url = Uri.base.replace(
       path: '/slitherlink',
@@ -585,37 +546,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       },
     );
     BrowserUrl.replace(url);
-  }
-
-  Future<void> _redeemInvitationFromUrl(String code) async {
-    final currentUri = Uri.base;
-    final queryParameters = Map<String, String>.from(currentUri.queryParameters)
-      ..remove('code');
-    BrowserUrl.replace(
-      currentUri.replace(
-        path: '/slitherlink',
-        queryParameters: queryParameters.isEmpty ? null : queryParameters,
-      ),
-    );
-    try {
-      final expiresAt = await _api.redeemInvitation(code);
-      BrowserUrl.writeLocalValue(
-        'puzzle_server_access_expires_at',
-        expiresAt.toUtc().toIso8601String(),
-      );
-      if (!mounted) return;
-      setState(() {
-        _hasServerInvitation = true;
-        _isBusy = false;
-        _status = '邀请码有效，已安全保存在浏览器中，本周无需再次输入。';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _isBusy = false;
-        _status = '邀请码兑换失败（可能已过期）：$error';
-      });
-    }
   }
 
   Future<void> _share(_ShareMode mode) async {
@@ -663,6 +593,11 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
       onCellTap: _editClue,
       onGesture: _handleGesture,
       onStroke: _handleStroke,
+      showPuzzleSidebarButton: !mobileLayout && !_puzzleSidebarVisible,
+      showControlsSidebarButton: !mobileLayout && !_controlsSidebarVisible,
+      onShowPuzzleSidebar: () => setState(() => _puzzleSidebarVisible = true),
+      onShowControlsSidebar: () =>
+          setState(() => _controlsSidebarVisible = true),
     );
     return Scaffold(
       drawer: mobileLayout ? _buildMobileDrawer(context) : null,
@@ -742,20 +677,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
                 const SizedBox(width: 8),
               ]
             : [
-                if (!_puzzleSidebarVisible)
-                  IconButton(
-                    tooltip: '显示谜题栏',
-                    onPressed: () =>
-                        setState(() => _puzzleSidebarVisible = true),
-                    icon: const Icon(Icons.menu_open),
-                  ),
-                if (!_controlsSidebarVisible)
-                  IconButton(
-                    tooltip: '显示设置栏',
-                    onPressed: () =>
-                        setState(() => _controlsSidebarVisible = true),
-                    icon: const Icon(Icons.tune),
-                  ),
                 PopupMenuButton<_ShareMode>(
                   tooltip: '分享',
                   icon: const Icon(Icons.share_outlined),
@@ -1479,6 +1400,10 @@ class _BoardPanel extends StatefulWidget {
     required this.onCellTap,
     required this.onGesture,
     required this.onStroke,
+    required this.showPuzzleSidebarButton,
+    required this.showControlsSidebarButton,
+    required this.onShowPuzzleSidebar,
+    required this.onShowControlsSidebar,
   });
 
   final SlitherlinkPuzzle puzzle;
@@ -1488,6 +1413,10 @@ class _BoardPanel extends StatefulWidget {
   final ValueChanged<CellId> onCellTap;
   final void Function(PuzzleTarget, PointerGesture) onGesture;
   final ValueChanged<Map<EdgeId, SlitherlinkEdgeState>> onStroke;
+  final bool showPuzzleSidebarButton;
+  final bool showControlsSidebarButton;
+  final VoidCallback onShowPuzzleSidebar;
+  final VoidCallback onShowControlsSidebar;
 
   @override
   State<_BoardPanel> createState() => _BoardPanelState();
@@ -1885,6 +1814,18 @@ class _BoardPanelState extends State<_BoardPanel> {
                 bottom: 8,
                 child: Column(
                   children: [
+                    if (widget.showPuzzleSidebarButton)
+                      _zoomButton(
+                        tooltip: '显示谜题栏',
+                        icon: Icons.menu_open,
+                        onPressed: widget.onShowPuzzleSidebar,
+                      ),
+                    if (widget.showControlsSidebarButton)
+                      _zoomButton(
+                        tooltip: '显示设置栏',
+                        icon: Icons.tune,
+                        onPressed: widget.onShowControlsSidebar,
+                      ),
                     _zoomButton(
                       tooltip: '放大棋盘',
                       icon: Icons.add,

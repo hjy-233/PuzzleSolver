@@ -167,6 +167,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byTooltip('显示谜题栏'), findsOneWidget);
     expect(find.byTooltip('显示设置栏'), findsOneWidget);
+    expect(tester.getCenter(find.byTooltip('显示谜题栏')).dy, greaterThan(700));
+    expect(tester.getCenter(find.byTooltip('显示设置栏')).dy, greaterThan(700));
 
     await tester.tap(find.byTooltip('显示谜题栏'));
     await tester.pumpAndSettle();
