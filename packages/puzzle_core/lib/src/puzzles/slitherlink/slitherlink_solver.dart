@@ -134,7 +134,7 @@ final class SlitherlinkGenerator
       final hasRoomForIrregularShape = options.rows > 1 && options.columns > 1;
       if (hasRoomForIrregularShape &&
           attempt < attemptLimit - 1 &&
-          _isRectangle(cells)) {
+          !_isIrregularEnough(topology, cells)) {
         continue;
       }
       final solution = _loopAroundCells(topology: topology, cells: cells);
@@ -187,6 +187,19 @@ final class SlitherlinkGenerator
                     rows: options.rows,
                     columns: options.columns,
                   ),
+                  loopCells: cells,
+                  minimumLoopClueCount: _minimumLoopClueCount(
+                    options.difficulty,
+                    cells.length,
+                  ),
+                  boundaryCells: {
+                    for (final cell in cells)
+                      if (fullClues[cell]! > 0) cell,
+                  },
+                  minimumBoundaryClueCount: _minimumBoundaryClueCount(
+                    options.difficulty,
+                    cells.where((cell) => fullClues[cell]! > 0).length,
+                  ),
                 ) ??
                 fullClues
           : fullClues;
@@ -227,15 +240,18 @@ final class SlitherlinkGenerator
     final area = topology.rows * topology.columns;
     final maximumSize = min(
       area,
-      area < 36 ? area.clamp(8, 15).toInt() : max(15, (area * .4).round()),
+      area < 36 ? area.clamp(8, 15).toInt() : max(15, (area * .68).round()),
     );
     final range = switch (difficulty) {
-      PuzzleDifficulty.easy => (4, (maximumSize * .55).round()),
-      PuzzleDifficulty.normal => (7, (maximumSize * .75).round()),
-      PuzzleDifficulty.hard => (
-        max(9, (maximumSize * .8).round()),
-        maximumSize,
+      PuzzleDifficulty.easy => (
+        max(4, (maximumSize * .25).round()),
+        (maximumSize * .55).round(),
       ),
+      PuzzleDifficulty.normal => (
+        (maximumSize * .55).round(),
+        (maximumSize * .8).round(),
+      ),
+      PuzzleDifficulty.hard => ((maximumSize * .75).round(), maximumSize),
     };
     final lowerBound = range.$1.clamp(1, maximumSize);
     final upperBound = range.$2.clamp(lowerBound, maximumSize);
@@ -245,9 +261,35 @@ final class SlitherlinkGenerator
         for (final cell in cells) ..._neighbours(topology, cell),
       }..removeAll(cells);
       if (candidates.isEmpty) break;
-      cells.add(candidates.elementAt(random.nextInt(candidates.length)));
+      final weightedCandidates = [
+        for (final candidate in candidates)
+          for (
+            var weight = 0;
+            weight < _growthWeight(topology, cells, candidate);
+            weight++
+          )
+            candidate,
+      ];
+      cells.add(weightedCandidates[random.nextInt(weightedCandidates.length)]);
     }
     return cells;
+  }
+
+  int _growthWeight(
+    GridTopology topology,
+    Set<CellId> cells,
+    CellId candidate,
+  ) {
+    final neighbours = _neighbours(
+      topology,
+      candidate,
+    ).where(cells.contains).length;
+    return switch (neighbours) {
+      1 => 4,
+      2 => 3,
+      3 => 2,
+      _ => 1,
+    };
   }
 
   Iterable<CellId> _neighbours(GridTopology topology, CellId cell) sync* {
@@ -258,18 +300,27 @@ final class SlitherlinkGenerator
     }
   }
 
-  bool _isRectangle(Set<CellId> cells) {
-    final rows = cells.map((cell) => cell.row);
-    final columns = cells.map((cell) => cell.column);
-    final height =
-        rows.reduce((a, b) => a > b ? a : b) -
-        rows.reduce((a, b) => a < b ? a : b) +
-        1;
-    final width =
-        columns.reduce((a, b) => a > b ? a : b) -
-        columns.reduce((a, b) => a < b ? a : b) +
-        1;
-    return cells.length == height * width;
+  bool _isIrregularEnough(GridTopology topology, Set<CellId> cells) {
+    final boundary = topology.allEdges
+        .where(
+          (edge) =>
+              topology.cellsBeside(edge).where(cells.contains).length == 1,
+        )
+        .toSet();
+    var turns = 0;
+    for (var row = 0; row <= topology.rows; row++) {
+      for (var column = 0; column <= topology.columns; column++) {
+        final incident = topology
+            .edgesAt(VertexId(row, column))
+            .where(boundary.contains)
+            .toList();
+        if (incident.length == 2 &&
+            incident[0].orientation != incident[1].orientation) {
+          turns++;
+        }
+      }
+    }
+    return turns >= max(6, (boundary.length * .28).ceil());
   }
 
   SlitherlinkState _loopAroundCells({
@@ -291,9 +342,18 @@ final class SlitherlinkGenerator
     required SlitherlinkSolver solver,
     required int? maximumChecks,
     required int minimumClueCount,
+    required Set<CellId> loopCells,
+    required int minimumLoopClueCount,
+    required Set<CellId> boundaryCells,
+    required int minimumBoundaryClueCount,
   }) {
     final clues = Map<CellId, int>.from(fullClues);
     final order = fullClues.keys.toList()..shuffle(random);
+    order.sort((left, right) {
+      final leftEasy = fullClues[left] == 0 || fullClues[left] == 3;
+      final rightEasy = fullClues[right] == 0 || fullClues[right] == 3;
+      return (rightEasy ? 1 : 0).compareTo(leftEasy ? 1 : 0);
+    });
     var cursor = 0;
     var batchSize = max(1, ((clues.length - minimumClueCount) / 12).ceil());
     final checkLimit =
@@ -311,6 +371,18 @@ final class SlitherlinkGenerator
       final removed = <CellId, int>{
         for (final cell in batch) cell: clues.remove(cell)!,
       };
+      final loopClues = clues.keys.where(loopCells.contains).length;
+      final boundaryClues = clues.keys.where(boundaryCells.contains).length;
+      if (loopClues < minimumLoopClueCount ||
+          boundaryClues < minimumBoundaryClueCount) {
+        clues.addAll(removed);
+        if (batchSize > 1) {
+          batchSize = max(1, batchSize ~/ 2);
+        } else {
+          cursor += batch.length;
+        }
+        continue;
+      }
       final candidate = SlitherlinkPuzzle(topology: topology, clues: clues);
       checks++;
       try {
@@ -348,8 +420,8 @@ final class SlitherlinkGenerator
     final area = rows * columns;
     final difficultyClueRatio = switch (options.difficulty) {
       PuzzleDifficulty.easy => .68,
-      PuzzleDifficulty.normal => .42,
-      PuzzleDifficulty.hard => .16,
+      PuzzleDifficulty.normal => .44,
+      PuzzleDifficulty.hard => .24,
     };
     final baseFloor = max(
       (fullClueCount * difficultyClueRatio).ceil(),
@@ -358,6 +430,24 @@ final class SlitherlinkGenerator
     final adjustBy =
         ((fullClueCount - baseFloor) * (options.clueDensity - .5) * 2).round();
     return max(1, baseFloor + adjustBy).clamp(1, fullClueCount - 1);
+  }
+
+  int _minimumLoopClueCount(PuzzleDifficulty difficulty, int loopArea) {
+    final ratio = switch (difficulty) {
+      PuzzleDifficulty.easy => .52,
+      PuzzleDifficulty.normal => .36,
+      PuzzleDifficulty.hard => .32,
+    };
+    return max(1, (loopArea * ratio).ceil());
+  }
+
+  int _minimumBoundaryClueCount(PuzzleDifficulty difficulty, int count) {
+    final ratio = switch (difficulty) {
+      PuzzleDifficulty.easy => .42,
+      PuzzleDifficulty.normal => .28,
+      PuzzleDifficulty.hard => .26,
+    };
+    return max(1, (count * ratio).ceil());
   }
 
   double _difficultyDistance(
@@ -437,14 +527,22 @@ final class SlitherlinkSolver {
   }) {
     var state = initialState ?? puzzle.initialState;
     final steps = <SolveStep<SlitherlinkAction>>[];
+    EdgeId? focusEdge;
 
     while (true) {
-      final propagation = _propagate(puzzle, state);
+      final propagation = _propagate(puzzle, state, near: focusEdge);
       if (propagation == null) {
         throw StateError('The supplied Slitherlink state is contradictory.');
       }
       state = propagation.state;
       steps.addAll(propagation.steps);
+      if (propagation.steps.isNotEmpty &&
+          propagation.steps.last.actions.isNotEmpty) {
+        final lastAction = propagation.steps.last.actions.last;
+        if (lastAction case SetSlitherlinkEdge(:final edge)) {
+          focusEdge = edge;
+        }
+      }
       if (_isComplete(puzzle, state)) {
         final solutions = _countSolutions(
           puzzle,
@@ -459,7 +557,7 @@ final class SlitherlinkSolver {
         );
       }
 
-      final edge = _nextUndecidedEdge(puzzle, state);
+      final edge = _nextUndecidedEdge(puzzle, state, near: focusEdge);
       if (edge == null) {
         throw StateError(
           'No undecided edge exists, but the puzzle is not complete.',
@@ -496,6 +594,7 @@ final class SlitherlinkSolver {
           ? SlitherlinkEdgeState.crossed
           : SlitherlinkEdgeState.line;
       state = state.withEdge(edge, forcedState);
+      focusEdge = edge;
       steps.add(
         SolveStep(
           ruleId: 'slitherlink.assumptionContradiction',
@@ -510,12 +609,49 @@ final class SlitherlinkSolver {
     }
   }
 
-  _Propagation? _propagate(SlitherlinkPuzzle puzzle, SlitherlinkState input) {
+  _Propagation? _propagate(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState input, {
+    EdgeId? near,
+  }) {
     var state = input;
     final steps = <SolveStep<SlitherlinkAction>>[];
+    var focusEdge = near;
     while (true) {
       final deductions = <_Deduction>[];
+
+      final zeroCells = puzzle.clues.entries
+          .where((entry) => entry.value == 0)
+          .map((entry) => entry.key)
+          .toList();
+      final zeroEdges = <EdgeId>{};
+      for (final cell in zeroCells) {
+        for (final edge in puzzle.topology.edgesAround(cell)) {
+          if (state.stateOf(edge) == SlitherlinkEdgeState.line) return null;
+          if (state.stateOf(edge) == SlitherlinkEdgeState.empty) {
+            zeroEdges.add(edge);
+          }
+        }
+      }
+      if (zeroEdges.isNotEmpty) {
+        deductions.add(
+          _Deduction(
+            ruleId: 'slitherlink.zeroClues',
+            highlights: [
+              ...zeroCells.map(CellTarget.new),
+              ...zeroEdges.map(EdgeTarget.new),
+            ],
+            actions: [
+              for (final edge in zeroEdges)
+                SetSlitherlinkEdge(edge, SlitherlinkEdgeState.crossed),
+            ],
+            arguments: {'cells': zeroCells.length},
+          ),
+        );
+      }
+
       for (final entry in puzzle.clues.entries) {
+        if (entry.value == 0) continue;
         final edges = puzzle.topology.edgesAround(entry.key);
         final lines = edges
             .where((edge) => state.stateOf(edge) == SlitherlinkEdgeState.line)
@@ -602,12 +738,68 @@ final class SlitherlinkSolver {
           }
         }
       }
+
+      final loopClosure = _closedLoopAssignments(puzzle, state);
+      if (loopClosure == null) return null;
+      if (loopClosure.isNotEmpty) {
+        deductions.add(
+          _Deduction(
+            ruleId: 'slitherlink.loopClosed',
+            highlights: [
+              ...loopClosure.keys.map(EdgeTarget.new),
+              for (final cell in puzzle.clues.keys) CellTarget(cell),
+            ],
+            actions: [
+              for (final edge in loopClosure.keys)
+                SetSlitherlinkEdge(edge, SlitherlinkEdgeState.crossed),
+            ],
+            arguments: {'crosses': loopClosure.length},
+          ),
+        );
+      }
+
+      final insideOutside = _insideOutsideAssignments(puzzle, state);
+      if (insideOutside == null) return null;
+      if (insideOutside.isNotEmpty) {
+        final affectedCells = <CellId>{};
+        for (final edge in insideOutside.keys) {
+          affectedCells.addAll(puzzle.topology.cellsBeside(edge));
+        }
+        deductions.add(
+          _Deduction(
+            ruleId: 'slitherlink.insideOutside',
+            highlights: [
+              ...affectedCells.map(CellTarget.new),
+              ...insideOutside.keys.map(EdgeTarget.new),
+            ],
+            actions: [
+              for (final entry in insideOutside.entries)
+                SetSlitherlinkEdge(entry.key, entry.value),
+            ],
+            arguments: {
+              'lines': insideOutside.values
+                  .where((value) => value == SlitherlinkEdgeState.line)
+                  .length,
+            },
+          ),
+        );
+      }
+
+      if (deductions.isEmpty) {
+        final windowDeductions = _fourCellWindowDeductions(puzzle, state);
+        if (windowDeductions == null) return null;
+        deductions.addAll(windowDeductions);
+      }
+
       final applicable = _mergeDeductions(deductions, state);
       if (applicable == null) return null;
       if (applicable.isEmpty) return _Propagation(state: state, steps: steps);
-      final deduction = applicable.first;
+      final deduction = _selectNearbyDeduction(applicable, focusEdge);
       for (final action in deduction.actions) {
         state = state.withEdge(action.edge, action.state);
+      }
+      if (deduction.actions.isNotEmpty) {
+        focusEdge = deduction.actions.last.edge;
       }
       steps.add(
         SolveStep(
@@ -639,6 +831,273 @@ final class SlitherlinkSolver {
       if (hasChange) applicable.add(deduction);
     }
     return applicable;
+  }
+
+  _Deduction _selectNearbyDeduction(
+    List<_Deduction> deductions,
+    EdgeId? focus,
+  ) {
+    if (focus == null) return deductions.first;
+    var selected = deductions.first;
+    var selectedDistance = 1 << 30;
+    for (final deduction in deductions) {
+      var distance = 1 << 30;
+      for (final action in deduction.actions) {
+        distance = min(distance, _edgeDistance(focus, action.edge));
+      }
+      if (distance < selectedDistance ||
+          (distance == selectedDistance &&
+              deduction.actions.length > selected.actions.length)) {
+        selected = deduction;
+        selectedDistance = distance;
+      }
+    }
+    return selected;
+  }
+
+  int _edgeDistance(EdgeId first, EdgeId second) {
+    (int, int) center(EdgeId edge) => switch (edge.orientation) {
+      EdgeOrientation.horizontal => (edge.row * 2, edge.column * 2 + 1),
+      EdgeOrientation.vertical => (edge.row * 2 + 1, edge.column * 2),
+    };
+    final (firstRow, firstColumn) = center(first);
+    final (secondRow, secondColumn) = center(second);
+    return (firstRow - secondRow).abs() + (firstColumn - secondColumn).abs();
+  }
+
+  Map<EdgeId, SlitherlinkEdgeState>? _insideOutsideAssignments(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState state,
+  ) {
+    final topology = puzzle.topology;
+    final outside = topology.rows * topology.columns;
+    final relationships = _ParityUnionFind(outside + 1);
+    int cellIndex(CellId cell) => cell.row * topology.columns + cell.column;
+
+    for (final edge in topology.allEdges) {
+      final edgeState = state.stateOf(edge);
+      if (edgeState == SlitherlinkEdgeState.empty) continue;
+      final cells = topology.cellsBeside(edge);
+      final first = cellIndex(cells.first);
+      final second = cells.length == 2 ? cellIndex(cells.last) : outside;
+      final opposite = edgeState == SlitherlinkEdgeState.line;
+      if (!relationships.join(first, second, opposite)) return null;
+    }
+
+    final assignments = <EdgeId, SlitherlinkEdgeState>{};
+    for (final edge in topology.allEdges) {
+      if (state.stateOf(edge) != SlitherlinkEdgeState.empty) continue;
+      final cells = topology.cellsBeside(edge);
+      final first = relationships.find(cellIndex(cells.first));
+      final second = relationships.find(
+        cells.length == 2 ? cellIndex(cells.last) : outside,
+      );
+      if (first.$1 != second.$1) continue;
+      assignments[edge] = first.$2 == second.$2
+          ? SlitherlinkEdgeState.crossed
+          : SlitherlinkEdgeState.line;
+    }
+    return assignments;
+  }
+
+  Map<EdgeId, SlitherlinkEdgeState>? _closedLoopAssignments(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState state,
+  ) {
+    final topology = puzzle.topology;
+    final lineEdges = topology.allEdges
+        .where((edge) => state.stateOf(edge) == SlitherlinkEdgeState.line)
+        .toSet();
+    if (lineEdges.isEmpty) return const {};
+
+    final neighbours = <VertexId, Set<VertexId>>{};
+    final degree = <VertexId, int>{};
+    for (final edge in lineEdges) {
+      final vertices = topology.verticesOf(edge);
+      neighbours.putIfAbsent(vertices.first, () => {}).add(vertices.last);
+      neighbours.putIfAbsent(vertices.last, () => {}).add(vertices.first);
+      degree.update(vertices.first, (value) => value + 1, ifAbsent: () => 1);
+      degree.update(vertices.last, (value) => value + 1, ifAbsent: () => 1);
+    }
+
+    final visited = <VertexId>{};
+    Set<VertexId>? closedComponent;
+    for (final start in neighbours.keys) {
+      if (!visited.add(start)) continue;
+      final component = <VertexId>{start};
+      final pending = <VertexId>[start];
+      while (pending.isNotEmpty) {
+        final vertex = pending.removeLast();
+        for (final neighbour in neighbours[vertex]!) {
+          if (visited.add(neighbour)) {
+            component.add(neighbour);
+            pending.add(neighbour);
+          }
+        }
+      }
+      if (component.every((vertex) => degree[vertex] == 2)) {
+        if (closedComponent != null) return null;
+        closedComponent = component;
+      }
+    }
+    if (closedComponent == null) return const {};
+    if (neighbours.keys.any((vertex) => !closedComponent!.contains(vertex))) {
+      return null;
+    }
+
+    for (final entry in puzzle.clues.entries) {
+      final lines = topology
+          .edgesAround(entry.key)
+          .where((edge) => state.stateOf(edge) == SlitherlinkEdgeState.line)
+          .length;
+      if (lines != entry.value) return null;
+    }
+    return {
+      for (final edge in topology.allEdges)
+        if (state.stateOf(edge) == SlitherlinkEdgeState.empty)
+          edge: SlitherlinkEdgeState.crossed,
+    };
+  }
+
+  List<_Deduction>? _fourCellWindowDeductions(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState state,
+  ) {
+    final topology = puzzle.topology;
+    if (topology.rows < 2 || topology.columns < 2) return const [];
+    final deductions = <_Deduction>[];
+    for (var top = 0; top < topology.rows - 1; top++) {
+      for (var left = 0; left < topology.columns - 1; left++) {
+        final cells = [
+          CellId(top, left),
+          CellId(top, left + 1),
+          CellId(top + 1, left),
+          CellId(top + 1, left + 1),
+        ];
+        final clues = cells.where(puzzle.clues.containsKey).toList();
+        final edges = <EdgeId>{
+          for (final cell in cells) ...topology.edgesAround(cell),
+        };
+        final unknown = edges
+            .where((edge) => state.stateOf(edge) == SlitherlinkEdgeState.empty)
+            .toList();
+        final decidedCount = edges.length - unknown.length;
+        final hasCornerClue = clues.any(
+          (cell) =>
+              (cell.row == 0 || cell.row == topology.rows - 1) &&
+              (cell.column == 0 || cell.column == topology.columns - 1),
+        );
+        final constrainedThree = clues.any((cell) => puzzle.clues[cell] == 3);
+        final clueTouchesKnownEdge = clues.any(
+          (cell) => topology
+              .edgesAround(cell)
+              .any((edge) => state.stateOf(edge) != SlitherlinkEdgeState.empty),
+        );
+        if ((clues.length < 2 &&
+                decidedCount < 3 &&
+                !(hasCornerClue ||
+                    (constrainedThree && decidedCount > 0) ||
+                    clueTouchesKnownEdge)) ||
+            unknown.length > 12) {
+          continue;
+        }
+
+        final canBeLine = {for (final edge in unknown) edge: false};
+        final canBeCrossed = {for (final edge in unknown) edge: false};
+        var validCombinations = 0;
+        final combinations = 1 << unknown.length;
+        for (var mask = 0; mask < combinations; mask++) {
+          final candidate = <EdgeId, SlitherlinkEdgeState>{
+            for (final edge in edges)
+              if (state.stateOf(edge) != SlitherlinkEdgeState.empty)
+                edge: state.stateOf(edge),
+            for (var index = 0; index < unknown.length; index++)
+              unknown[index]: mask & (1 << index) == 0
+                  ? SlitherlinkEdgeState.crossed
+                  : SlitherlinkEdgeState.line,
+          };
+          if (!_validFourCellWindow(puzzle, cells, edges, candidate, state)) {
+            continue;
+          }
+          validCombinations++;
+          for (final edge in unknown) {
+            if (candidate[edge] == SlitherlinkEdgeState.line) {
+              canBeLine[edge] = true;
+            } else {
+              canBeCrossed[edge] = true;
+            }
+          }
+        }
+        if (validCombinations == 0) return null;
+
+        final forced = <EdgeId, SlitherlinkEdgeState>{};
+        for (final edge in unknown) {
+          if (canBeLine[edge] == true && canBeCrossed[edge] == false) {
+            forced[edge] = SlitherlinkEdgeState.line;
+          } else if (canBeCrossed[edge] == true && canBeLine[edge] == false) {
+            forced[edge] = SlitherlinkEdgeState.crossed;
+          }
+        }
+        if (forced.isNotEmpty) {
+          deductions.add(
+            _Deduction(
+              ruleId: 'slitherlink.fourCellWindow',
+              highlights: [
+                ...cells.map(CellTarget.new),
+                ...forced.keys.map(EdgeTarget.new),
+              ],
+              actions: [
+                for (final entry in forced.entries)
+                  SetSlitherlinkEdge(entry.key, entry.value),
+              ],
+              arguments: {'cells': clues.length},
+            ),
+          );
+        }
+      }
+    }
+    return deductions;
+  }
+
+  bool _validFourCellWindow(
+    SlitherlinkPuzzle puzzle,
+    List<CellId> cells,
+    Set<EdgeId> windowEdges,
+    Map<EdgeId, SlitherlinkEdgeState> candidate,
+    SlitherlinkState state,
+  ) {
+    final topology = puzzle.topology;
+    for (final cell in cells) {
+      final clue = puzzle.clues[cell];
+      if (clue == null) continue;
+      final lines = topology
+          .edgesAround(cell)
+          .where((edge) => candidate[edge] == SlitherlinkEdgeState.line)
+          .length;
+      if (lines != clue) return false;
+    }
+
+    final top = cells.first.row;
+    final left = cells.first.column;
+    for (var row = top; row <= top + 2; row++) {
+      for (var column = left; column <= left + 2; column++) {
+        final incident = topology.edgesAt(VertexId(row, column));
+        final lines = incident.where((edge) {
+          return (candidate[edge] ?? state.stateOf(edge)) ==
+              SlitherlinkEdgeState.line;
+        }).length;
+        if (lines > 2) return false;
+        final fullyDecided = incident.every((edge) {
+          return candidate.containsKey(edge) ||
+              state.stateOf(edge) != SlitherlinkEdgeState.empty;
+        });
+        if (fullyDecided && lines == 1) return false;
+        if (incident.every(windowEdges.contains) && lines != 0 && lines != 2) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   int _countSolutions(
@@ -742,6 +1201,20 @@ final class SlitherlinkSolver {
         }
       }
 
+      final loopClosure = _closedLoopAssignments(puzzle, state);
+      if (loopClosure == null) return null;
+      for (final edge in loopClosure.keys) {
+        forceEdges([edge], SlitherlinkEdgeState.crossed);
+      }
+      if (contradiction) return null;
+
+      final insideOutside = _insideOutsideAssignments(puzzle, state);
+      if (insideOutside == null) return null;
+      for (final entry in insideOutside.entries) {
+        forceEdges([entry.key], entry.value);
+      }
+      if (contradiction) return null;
+
       if (assignments.isEmpty) return state;
       state = state.withEdges(assignments);
     }
@@ -756,7 +1229,11 @@ final class SlitherlinkSolver {
     return puzzle.check(state).status == CheckStatus.solved;
   }
 
-  EdgeId? _nextUndecidedEdge(SlitherlinkPuzzle puzzle, SlitherlinkState state) {
+  EdgeId? _nextUndecidedEdge(
+    SlitherlinkPuzzle puzzle,
+    SlitherlinkState state, {
+    EdgeId? near,
+  }) {
     final scores = <EdgeId, int>{};
     void addConstraint(List<EdgeId> edges) {
       var lines = 0;
@@ -787,10 +1264,14 @@ final class SlitherlinkSolver {
     }
     EdgeId? selected;
     var highestScore = -1;
+    var nearestDistance = 1 << 30;
     for (final entry in scores.entries) {
-      if (entry.value > highestScore) {
+      final distance = near == null ? 0 : _edgeDistance(near, entry.key);
+      if (entry.value > highestScore ||
+          (entry.value == highestScore && distance < nearestDistance)) {
         selected = entry.key;
         highestScore = entry.value;
+        nearestDistance = distance;
       }
     }
     return selected;
@@ -822,4 +1303,34 @@ final class _SearchBudget {
   _SearchBudget(this.remaining);
 
   int remaining;
+}
+
+final class _ParityUnionFind {
+  _ParityUnionFind(int size)
+    : _parents = List.generate(size, (index) => index),
+      _oppositeToParent = List.filled(size, 0);
+
+  final List<int> _parents;
+  final List<int> _oppositeToParent;
+
+  (int, int) find(int node) {
+    final parent = _parents[node];
+    if (parent == node) return (node, 0);
+    final (root, parentParity) = find(parent);
+    _oppositeToParent[node] ^= parentParity;
+    _parents[node] = root;
+    return (root, _oppositeToParent[node]);
+  }
+
+  bool join(int first, int second, bool opposite) {
+    final (firstRoot, firstParity) = find(first);
+    final (secondRoot, secondParity) = find(second);
+    final requiredParity = opposite ? 1 : 0;
+    if (firstRoot == secondRoot) {
+      return firstParity ^ secondParity == requiredParity;
+    }
+    _parents[firstRoot] = secondRoot;
+    _oppositeToParent[firstRoot] = firstParity ^ secondParity ^ requiredParity;
+    return true;
+  }
 }
