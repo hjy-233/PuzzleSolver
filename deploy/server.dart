@@ -24,19 +24,10 @@ const _accessControlDataDirectory = String.fromEnvironment(
 
 final _apiRateLimiter = _ApiRateLimiter();
 late final AccessControlStore _accessControlStore;
-late final String _webBuildVersion;
 var _activeApiRequests = 0;
 var _activeHeavyOperations = 0;
 
 Future<void> main() async {
-  final mainJsFile = File('$rootDirectory/main.dart.js');
-  if (!await mainJsFile.exists()) {
-    throw StateError('Flutter web entrypoint not found: ${mainJsFile.path}');
-  }
-  final mainJsStat = await mainJsFile.stat();
-  _webBuildVersion =
-      '${mainJsStat.modified.microsecondsSinceEpoch}-${mainJsStat.size}';
-
   _accessControlStore = await AccessControlStore.open(
     dataDirectory: Directory(_accessControlDataDirectory),
   );
@@ -75,42 +66,12 @@ Future<void> _serve(HttpRequest request) async {
       : File('$rootDirectory/index.html');
 
   request.response.headers.contentType = _contentTypeFor(file.path);
-  request.response.headers.set(
-    HttpHeaders.cacheControlHeader,
-    'no-store, no-cache, max-age=0, must-revalidate',
-  );
   request.response.headers.set('Referrer-Policy', 'no-referrer');
   if (request.method == 'HEAD') {
     await request.response.close();
     return;
   }
 
-  if (file.path.endsWith('/index.html')) {
-    final html = await file.readAsString();
-    request.response.write(
-      html.replaceFirst(
-        'src="flutter_bootstrap.js"',
-        'src="flutter_bootstrap.js?v=$_webBuildVersion"',
-      ),
-    );
-    await request.response.close();
-    return;
-  }
-  if (file.path.endsWith('/flutter_bootstrap.js')) {
-    final bootstrap = await file.readAsString();
-    const entrypoint = '"mainJsPath":"main.dart.js"';
-    if (!bootstrap.contains(entrypoint)) {
-      throw StateError('Could not version Flutter web entrypoint URL.');
-    }
-    request.response.write(
-      bootstrap.replaceFirst(
-        entrypoint,
-        '"mainJsPath":"main.dart.js?v=$_webBuildVersion"',
-      ),
-    );
-    await request.response.close();
-    return;
-  }
   await file.openRead().pipe(request.response);
 }
 
