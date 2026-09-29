@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:puzzle_core/puzzle_core.dart';
 
 import 'browser_url.dart';
+import 'puzzle_widgets.dart';
 import 'puzzle_share.dart';
 import 'slitherlink_api.dart';
 
@@ -583,8 +584,6 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final mobileLayout = screenWidth < 920;
-    final showMobileUndo = screenWidth >= 360;
-    final showMobileRedo = screenWidth >= 420;
     final content = _BoardPanel(
       puzzle: _puzzle,
       state: _session.state,
@@ -601,180 +600,92 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
     );
     return Scaffold(
       drawer: mobileLayout ? _buildMobileDrawer(context) : null,
-      appBar: AppBar(
-        leading: mobileLayout
-            ? Builder(
-                builder: (context) => IconButton(
-                  tooltip: '选择谜题',
-                  icon: const Icon(Icons.menu),
-                  onPressed: Scaffold.of(context).openDrawer,
-                ),
-              )
-            : null,
-        title: Text(mobileLayout ? '数回' : 'PuzzleSolver'),
-        actions: mobileLayout
-            ? [
-                PopupMenuButton<_ShareMode>(
-                  tooltip: '分享',
-                  icon: const Icon(Icons.share_outlined),
-                  onSelected: (mode) => unawaited(_share(mode)),
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: _ShareMode.puzzlePage,
-                      child: Text('仅分享数回页面'),
-                    ),
-                    PopupMenuItem(
-                      value: _ShareMode.puzzle,
-                      child: Text('分享当前谜题'),
-                    ),
-                    PopupMenuItem(
-                      value: _ShareMode.puzzleAndProgress,
-                      child: Text('分享谜题和当前进度'),
-                    ),
-                  ],
-                ),
-                IconButton(
-                  tooltip: '新题',
-                  onPressed: _isBusy ? null : () => unawaited(_newPuzzle()),
-                  icon: const Icon(Icons.refresh),
-                ),
-                if (showMobileUndo)
-                  IconButton(
-                    tooltip: '撤销',
-                    onPressed: _session.canUndo ? _undo : null,
-                    icon: const Icon(Icons.undo),
-                  ),
-                if (showMobileRedo)
-                  IconButton(
-                    tooltip: '重做',
-                    onPressed: _session.canRedo ? _redo : null,
-                    icon: const Icon(Icons.redo),
-                  ),
-                if (!showMobileUndo || !showMobileRedo)
-                  PopupMenuButton<_MobileMenuAction>(
-                    tooltip: '更多操作',
-                    onSelected: (action) {
-                      switch (action) {
-                        case _MobileMenuAction.undo:
-                          _undo();
-                        case _MobileMenuAction.redo:
-                          _redo();
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      if (!showMobileUndo)
-                        const PopupMenuItem(
-                          value: _MobileMenuAction.undo,
-                          child: Text('撤销'),
-                        ),
-                      if (!showMobileRedo)
-                        const PopupMenuItem(
-                          value: _MobileMenuAction.redo,
-                          child: Text('重做'),
-                        ),
-                    ],
-                  ),
-                const SizedBox(width: 8),
-              ]
-            : [
-                PopupMenuButton<_ShareMode>(
-                  tooltip: '分享',
-                  icon: const Icon(Icons.share_outlined),
-                  onSelected: (mode) => unawaited(_share(mode)),
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: _ShareMode.puzzlePage,
-                      child: Text('仅分享数回页面'),
-                    ),
-                    PopupMenuItem(
-                      value: _ShareMode.puzzle,
-                      child: Text('分享当前谜题'),
-                    ),
-                    PopupMenuItem(
-                      value: _ShareMode.puzzleAndProgress,
-                      child: Text('分享谜题和当前进度'),
-                    ),
-                  ],
-                ),
-                TextButton.icon(
-                  onPressed: _isBusy ? null : () => unawaited(_newPuzzle()),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('新题'),
-                ),
-                TextButton.icon(
-                  onPressed: _session.canUndo ? _undo : null,
-                  icon: const Icon(Icons.undo),
-                  label: const Text('撤销'),
-                ),
-                TextButton.icon(
-                  onPressed: _session.canRedo ? _redo : null,
-                  icon: const Icon(Icons.redo),
-                  label: const Text('重做'),
-                ),
-                const SizedBox(width: 12),
-              ],
+      appBar: PuzzleTopBar(
+        mobile: mobileLayout,
+        width: screenWidth,
+        puzzleName: '数回',
+        canUndo: _session.canUndo,
+        canRedo: _session.canRedo,
+        onShare: (choice) => unawaited(
+          _share(switch (choice) {
+            PuzzleShareChoice.page => _ShareMode.puzzlePage,
+            PuzzleShareChoice.puzzle => _ShareMode.puzzle,
+            PuzzleShareChoice.progress => _ShareMode.puzzleAndProgress,
+          }),
+        ),
+        onNewPuzzle: _isBusy ? null : () => unawaited(_newPuzzle()),
+        onUndo: _undo,
+        onRedo: _redo,
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final sidebar = _Sidebar(
-            steps: _steps,
-            onStepTap: _replayToStep,
-            descriptionFor: _explanationFor,
+      body: Builder(
+        builder: (context) {
+          final sidebar = PuzzleLibrarySidebar(
+            puzzleName: '数回',
+            puzzleIcon: Icons.route_outlined,
             selectedStepIndex: _selectedStepIndex,
             sizeLabel: '${_puzzle.topology.rows} × ${_puzzle.topology.columns}',
+            otherPuzzleName: '数独',
+            otherPuzzleIcon: Icons.grid_3x3,
+            onSelectOtherPuzzle: () =>
+                Navigator.pushReplacementNamed(context, '/sudoku'),
+            steps: [
+              for (final step in _steps)
+                PuzzleStepItem(
+                  title: _stepTitle(step),
+                  description: _explanationFor(step),
+                ),
+            ],
+            onStepTap: _replayToStep,
             onClose: () => setState(() => _puzzleSidebarVisible = false),
           );
-          if (constraints.maxWidth < 920) {
-            return Column(
-              children: [
-                Expanded(flex: 6, child: content),
-                _MobileActionBar(
-                  enabled: !_isBusy && !_editingClues,
-                  onHint: _showHint,
-                  onSolve: _solve,
-                  onCheck: _check,
-                  onSettings: _showSettingsSheet,
-                ),
-                const Divider(height: 1),
-                if (_stepsVisible)
-                  Expanded(
-                    flex: 5,
-                    child: _MobileStepsPanel(
-                      steps: _steps,
-                      selectedStepIndex: _selectedStepIndex,
-                      descriptionFor: _explanationFor,
-                      onStepTap: _replayToStep,
-                      onHide: () => setState(() => _stepsVisible = false),
-                      status: _status,
-                    ),
-                  )
-                else
-                  SizedBox(
-                    height: 40,
-                    child: TextButton.icon(
-                      onPressed: () => setState(() => _stepsVisible = true),
-                      icon: const Icon(Icons.expand_less),
-                      label: const Text('显示推理步骤'),
-                    ),
-                  ),
-              ],
-            );
-          }
           final controls = _buildControls(
             onClose: () => setState(() => _controlsSidebarVisible = false),
           );
-          return Row(
-            children: [
-              if (_puzzleSidebarVisible) ...[
-                SizedBox(width: 250, child: sidebar),
-                const VerticalDivider(width: 1),
+          return PuzzleWorkspace(
+            board: content,
+            leftSidebar: sidebar,
+            rightSidebar: controls,
+            mobileControls: PuzzleMobileActionBar(
+              actions: [
+                PuzzleActionItem(
+                  icon: Icons.lightbulb_outline,
+                  label: '提示',
+                  onPressed: !_isBusy && !_editingClues ? _showHint : null,
+                ),
+                PuzzleActionItem(
+                  icon: Icons.auto_fix_high,
+                  label: '自动解题',
+                  onPressed: !_isBusy && !_editingClues ? _solve : null,
+                ),
+                PuzzleActionItem(
+                  icon: Icons.fact_check_outlined,
+                  label: '检查',
+                  onPressed: !_isBusy && !_editingClues ? _check : null,
+                ),
+                PuzzleActionItem(
+                  icon: Icons.more_horiz,
+                  label: '设置',
+                  onPressed: _showSettingsSheet,
+                ),
               ],
-              Expanded(child: content),
-              if (_controlsSidebarVisible) ...[
-                const VerticalDivider(width: 1),
-                SizedBox(width: 310, child: controls),
+            ),
+            mobileSteps: PuzzleMobileStepsPanel(
+              steps: [
+                for (final step in _steps)
+                  PuzzleStepItem(
+                    title: _stepTitle(step),
+                    description: _explanationFor(step),
+                  ),
               ],
-            ],
+              selectedStepIndex: _selectedStepIndex,
+              onStepTap: _replayToStep,
+              onHide: () => setState(() => _stepsVisible = false),
+              status: _status,
+            ),
+            showLeftSidebar: _puzzleSidebarVisible,
+            showRightSidebar: _controlsSidebarVisible,
+            showMobileSteps: _stepsVisible,
+            onShowMobileSteps: () => setState(() => _stepsVisible = true),
           );
         },
       ),
@@ -798,6 +709,11 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
               '${_puzzle.topology.rows} × ${_puzzle.topology.columns}',
             ),
             onTap: () => Navigator.of(context).pop(),
+          ),
+          ListTile(
+            leading: const Icon(Icons.grid_3x3),
+            title: const Text('数独'),
+            onTap: () => Navigator.pushReplacementNamed(context, '/sudoku'),
           ),
         ],
       ),
@@ -848,18 +764,12 @@ class _SlitherlinkPageState extends State<SlitherlinkPage> {
   );
 
   void _showSettingsSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, refreshSettings) => FractionallySizedBox(
-          heightFactor: .9,
-          child: _buildControls(
-            settingsOnly: true,
-            refreshSettings: () => refreshSettings(() {}),
-          ),
-        ),
+    showPuzzleSettingsSheet(
+      context,
+      (sheetContext, refreshSettings) => _buildControls(
+        settingsOnly: true,
+        refreshSettings: refreshSettings,
+        onClose: () => Navigator.pop(sheetContext),
       ),
     );
   }
@@ -921,8 +831,6 @@ final class _ClueEditResult {
 
 enum _ShareMode { puzzlePage, puzzle, puzzleAndProgress }
 
-enum _MobileMenuAction { undo, redo }
-
 String _stepTitle(SolveStep<SlitherlinkAction> step) => switch (step.ruleId) {
   'slitherlink.clueReached' => '数字满足',
   'slitherlink.remainingEdgesRequired' => '必须画线',
@@ -935,272 +843,6 @@ String _stepTitle(SolveStep<SlitherlinkAction> step) => switch (step.ruleId) {
   'slitherlink.assumptionContradiction' => '排除一边',
   _ => '推理',
 };
-
-class _Sidebar extends StatelessWidget {
-  const _Sidebar({
-    required this.steps,
-    required this.onStepTap,
-    required this.descriptionFor,
-    required this.selectedStepIndex,
-    required this.sizeLabel,
-    required this.onClose,
-  });
-
-  final List<SolveStep<SlitherlinkAction>> steps;
-  final ValueChanged<int> onStepTap;
-  final String Function(SolveStep<SlitherlinkAction> step) descriptionFor;
-  final int? selectedStepIndex;
-  final String sizeLabel;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) => ColoredBox(
-    color: const Color(0xFF14161D),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '谜题库',
-                  style: TextStyle(fontSize: 14, color: Color(0xFFB6B9C7)),
-                ),
-              ),
-              IconButton(
-                tooltip: '隐藏谜题栏',
-                onPressed: onClose,
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
-        ),
-        ListTile(
-          selected: true,
-          leading: const Icon(Icons.route_outlined),
-          title: const Text('数回'),
-          subtitle: Text('$sizeLabel 唯一解生成题'),
-        ),
-        const Divider(),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-          child: Text(
-            '推理步骤 ${steps.length}',
-            style: const TextStyle(fontSize: 14, color: Color(0xFFB6B9C7)),
-          ),
-        ),
-        Expanded(
-          child: steps.isEmpty
-              ? const Center(
-                  child: Text(
-                    '还没有提示步骤',
-                    style: TextStyle(color: Color(0xFF9094A3)),
-                  ),
-                )
-              : ListView.builder(
-                  itemCount: steps.length,
-                  itemBuilder: (context, index) => _buildStepTile(index),
-                ),
-        ),
-      ],
-    ),
-  );
-
-  Widget _buildStepTile(int index) => ListTile(
-    selected: index == selectedStepIndex,
-    leading: CircleAvatar(radius: 12, child: Text('${index + 1}')),
-    title: Text(_stepTitle(steps[index])),
-    subtitle: Text(
-      descriptionFor(steps[index]),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-    ),
-    onTap: () => onStepTap(index),
-  );
-}
-
-class _MobileActionBar extends StatelessWidget {
-  const _MobileActionBar({
-    required this.enabled,
-    required this.onHint,
-    required this.onSolve,
-    required this.onCheck,
-    required this.onSettings,
-  });
-
-  final bool enabled;
-  final VoidCallback onHint;
-  final VoidCallback onSolve;
-  final VoidCallback onCheck;
-  final VoidCallback onSettings;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: const Color(0xFF161821),
-    child: SizedBox(
-      height: 68,
-      child: Row(
-        children: [
-          _buildButton(
-            icon: Icons.lightbulb_outline,
-            label: '提示',
-            onPressed: enabled ? onHint : null,
-          ),
-          _buildButton(
-            icon: Icons.auto_fix_high,
-            label: '自动解题',
-            onPressed: enabled ? onSolve : null,
-          ),
-          _buildButton(
-            icon: Icons.fact_check_outlined,
-            label: '检查',
-            onPressed: enabled ? onCheck : null,
-          ),
-          _buildButton(
-            icon: Icons.more_horiz,
-            label: '设置',
-            onPressed: onSettings,
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _buildButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-  }) => Expanded(
-    child: InkWell(
-      onTap: onPressed,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            icon,
-            size: 23,
-            color: onPressed == null ? null : const Color(0xFFB7C5FF),
-          ),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 12)),
-        ],
-      ),
-    ),
-  );
-}
-
-class _MobileStepsPanel extends StatelessWidget {
-  const _MobileStepsPanel({
-    required this.steps,
-    required this.selectedStepIndex,
-    required this.descriptionFor,
-    required this.onStepTap,
-    required this.onHide,
-    required this.status,
-  });
-
-  final List<SolveStep<SlitherlinkAction>> steps;
-  final int? selectedStepIndex;
-  final String Function(SolveStep<SlitherlinkAction> step) descriptionFor;
-  final ValueChanged<int> onStepTap;
-  final VoidCallback onHide;
-  final String status;
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedStep =
-        selectedStepIndex != null && selectedStepIndex! < steps.length
-        ? steps[selectedStepIndex!]
-        : null;
-    return ColoredBox(
-      color: const Color(0xFF14161D),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Row(
-              children: [
-                Text('推理步骤', style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(width: 8),
-                Chip(
-                  label: Text('${steps.length}'),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: '隐藏推理步骤',
-                  onPressed: onHide,
-                  icon: const Icon(Icons.expand_more),
-                ),
-              ],
-            ),
-          ),
-          if (selectedStep != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '第 ${selectedStepIndex! + 1} 步 · ${_stepTitle(selectedStep)}',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(descriptionFor(selectedStep)),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else if (steps.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text(
-                status,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xFFB6B9C7)),
-              ),
-            ),
-          Expanded(
-            child: steps.isEmpty
-                ? const Center(
-                    child: Text(
-                      '点“提示”或“自动解题”开始推理',
-                      style: TextStyle(color: Color(0xFF9094A3)),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    itemCount: steps.length,
-                    itemBuilder: (context, index) => ListTile(
-                      dense: true,
-                      selected: index == selectedStepIndex,
-                      leading: CircleAvatar(
-                        radius: 14,
-                        child: Text('${index + 1}'),
-                      ),
-                      title: Text(_stepTitle(steps[index])),
-                      onTap: () => onStepTap(index),
-                    ),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _Controls extends StatelessWidget {
   const _Controls({
@@ -1250,30 +892,14 @@ class _Controls extends StatelessWidget {
   final bool settingsOnly;
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    padding: const EdgeInsets.all(20),
+  Widget build(BuildContext context) => PuzzleControlsPanel(
+    title: '数回',
+    description: '让所有线段组成一个闭环，并让每个数字格周围的线数相等。',
+    closeTooltip: settingsOnly ? '关闭设置' : '隐藏设置栏',
+    onClose: onClose,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '数回',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-            ),
-            if (onClose != null)
-              IconButton(
-                tooltip: '隐藏设置栏',
-                onPressed: onClose,
-                icon: const Icon(Icons.close),
-              ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        const Text('让所有线段组成一个闭环，并让每个数字格周围的线数相等。'),
-        const SizedBox(height: 22),
         Text('新题设置', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 12),
         Row(
@@ -1423,7 +1049,7 @@ class _BoardPanel extends StatefulWidget {
 }
 
 class _BoardPanelState extends State<_BoardPanel> {
-  final _transformationController = TransformationController();
+  final _boardController = PuzzleBoardController();
   final _focusNode = FocusNode();
   final _touchPositions = <int, Offset>{};
   final _canvasTouchPointers = <int>{};
@@ -1445,8 +1071,7 @@ class _BoardPanelState extends State<_BoardPanel> {
   void didUpdateWidget(covariant _BoardPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.puzzle, widget.puzzle)) {
-      _transformationController.value = _transformationController.value.clone()
-        ..setIdentity();
+      _boardController.reset();
     }
   }
 
@@ -1454,31 +1079,16 @@ class _BoardPanelState extends State<_BoardPanel> {
   void dispose() {
     _pendingTapTimer?.cancel();
     _focusNode.dispose();
-    _transformationController.dispose();
+    _boardController.dispose();
     super.dispose();
   }
 
   void _panBy(Offset delta) {
-    final matrix = _transformationController.value.clone();
-    matrix.storage[12] += delta.dx;
-    matrix.storage[13] += delta.dy;
-    _transformationController.value = matrix;
+    _boardController.panBy(delta);
   }
 
   void _zoomAt(Offset oldFocalPoint, Offset newFocalPoint, double factor) {
-    final matrix = _transformationController.value;
-    final currentScale = matrix.getMaxScaleOnAxis();
-    final nextScale = (currentScale * factor).clamp(.7, 5.0);
-    final sceneAnchor = _transformationController.toScene(oldFocalPoint);
-    final next = Matrix4.identity()
-      ..translateByDouble(
-        newFocalPoint.dx - sceneAnchor.dx * nextScale,
-        newFocalPoint.dy - sceneAnchor.dy * nextScale,
-        0,
-        1,
-      )
-      ..scaleByDouble(nextScale, nextScale, 1, 1);
-    _transformationController.value = next;
+    _boardController.zoomAt(oldFocalPoint, newFocalPoint, factor);
   }
 
   void _onViewportPointerDown(PointerDownEvent event) {
@@ -1733,18 +1343,7 @@ class _BoardPanelState extends State<_BoardPanel> {
   void _zoomBy(double factor) {
     final viewport = context.size;
     if (viewport == null) return;
-    final currentScale = _transformationController.value.getMaxScaleOnAxis();
-    final nextScale = (currentScale * factor).clamp(.7, 5.0);
-    final appliedFactor = nextScale / currentScale;
-    final transform = _transformationController.value.clone()
-      ..translateByDouble(
-        viewport.width * (1 - appliedFactor) / 2,
-        viewport.height * (1 - appliedFactor) / 2,
-        0,
-        1,
-      )
-      ..scaleByDouble(appliedFactor, appliedFactor, 1, 1);
-    _transformationController.value = transform;
+    _boardController.zoomCentered(viewport, factor);
   }
 
   @override
@@ -1763,7 +1362,7 @@ class _BoardPanelState extends State<_BoardPanel> {
             fit: StackFit.expand,
             children: [
               InteractiveViewer(
-                transformationController: _transformationController,
+                transformationController: _boardController.transformation,
                 panEnabled: false,
                 scaleEnabled: false,
                 minScale: .7,
@@ -1812,60 +1411,22 @@ class _BoardPanelState extends State<_BoardPanel> {
               Positioned(
                 right: 8,
                 bottom: 8,
-                child: Column(
-                  children: [
-                    if (widget.showPuzzleSidebarButton)
-                      _zoomButton(
-                        tooltip: '显示谜题栏',
-                        icon: Icons.menu_open,
-                        onPressed: widget.onShowPuzzleSidebar,
-                      ),
-                    if (widget.showControlsSidebarButton)
-                      _zoomButton(
-                        tooltip: '显示设置栏',
-                        icon: Icons.tune,
-                        onPressed: widget.onShowControlsSidebar,
-                      ),
-                    _zoomButton(
-                      tooltip: '放大棋盘',
-                      icon: Icons.add,
-                      onPressed: () => _zoomBy(1.25),
-                    ),
-                    _zoomButton(
-                      tooltip: '缩小棋盘',
-                      icon: Icons.remove,
-                      onPressed: () => _zoomBy(.8),
-                    ),
-                    _zoomButton(
-                      tooltip: '重置棋盘缩放',
-                      icon: Icons.fit_screen_outlined,
-                      onPressed: () {
-                        _transformationController.value =
-                            _transformationController.value.clone()
-                              ..setIdentity();
-                      },
-                    ),
-                  ],
+                child: PuzzleBoardTools(
+                  onZoomIn: () => _zoomBy(1.25),
+                  onZoomOut: () => _zoomBy(.8),
+                  onReset: _boardController.reset,
+                  onShowPuzzleSidebar: widget.showPuzzleSidebarButton
+                      ? widget.onShowPuzzleSidebar
+                      : null,
+                  onShowControlsSidebar: widget.showControlsSidebarButton
+                      ? widget.onShowControlsSidebar
+                      : null,
                 ),
               ),
             ],
           ),
         ),
       ),
-    ),
-  );
-
-  Widget _zoomButton({
-    required String tooltip,
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) => Padding(
-    padding: const EdgeInsets.only(top: 4),
-    child: IconButton.filledTonal(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon),
-      visualDensity: VisualDensity.compact,
     ),
   );
 }

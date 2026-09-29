@@ -7,28 +7,30 @@ import 'package:puzzle_core/puzzle_core.dart';
 final class SlitherlinkShare {
   const SlitherlinkShare._();
 
-  static String encodePuzzle(SlitherlinkPuzzle puzzle) => _encode({
-    'r': puzzle.topology.rows,
-    'c': puzzle.topology.columns,
-    'n': [
-      for (final entry in puzzle.clues.entries)
-        [entry.key.row, entry.key.column, entry.value],
-    ],
-  });
-
-  static String encodeProgress(SlitherlinkState state) => _encode([
-    for (final entry in state.edges.entries)
-      if (entry.value != SlitherlinkEdgeState.empty)
-        [
-          entry.key.orientation == EdgeOrientation.horizontal ? 0 : 1,
-          entry.key.row,
-          entry.key.column,
-          entry.value == SlitherlinkEdgeState.line ? 1 : 2,
+  static String encodePuzzle(SlitherlinkPuzzle puzzle) =>
+      PuzzleShareCodec.encode({
+        'r': puzzle.topology.rows,
+        'c': puzzle.topology.columns,
+        'n': [
+          for (final entry in puzzle.clues.entries)
+            [entry.key.row, entry.key.column, entry.value],
         ],
-  ]);
+      });
+
+  static String encodeProgress(SlitherlinkState state) =>
+      PuzzleShareCodec.encode([
+        for (final entry in state.edges.entries)
+          if (entry.value != SlitherlinkEdgeState.empty)
+            [
+              entry.key.orientation == EdgeOrientation.horizontal ? 0 : 1,
+              entry.key.row,
+              entry.key.column,
+              entry.value == SlitherlinkEdgeState.line ? 1 : 2,
+            ],
+      ]);
 
   static SlitherlinkPuzzle decodePuzzle(String encoded) {
-    final value = _decode(encoded);
+    final value = PuzzleShareCodec.decode(encoded);
     if (value is! Map<String, dynamic>) {
       throw const FormatException('分享链接中的题目格式无效。');
     }
@@ -68,7 +70,7 @@ final class SlitherlinkShare {
     String encoded,
     GridTopology topology,
   ) {
-    final value = _decode(encoded);
+    final value = PuzzleShareCodec.decode(encoded);
     if (value is! List ||
         value.length >
             2 * topology.rows * topology.columns +
@@ -102,11 +104,132 @@ final class SlitherlinkShare {
     }
     return SlitherlinkState(edges);
   }
+}
 
-  static String _encode(Object value) =>
+final class SudokuShare {
+  const SudokuShare._();
+
+  static String encodePuzzle(SudokuPuzzle puzzle) => PuzzleShareCodec.encode({
+    'n': puzzle.size,
+    'g': [
+      for (final entry in puzzle.givens.entries)
+        [entry.key.row, entry.key.column, entry.value],
+    ],
+  });
+
+  static SudokuPuzzle decodePuzzle(String encoded) {
+    final raw = PuzzleShareCodec.decode(encoded);
+    if (raw is! Map<String, dynamic> ||
+        raw['n'] is! int ||
+        raw['g'] is! List ||
+        (raw['g'] as List).length > 81) {
+      throw const FormatException('分享链接中的数独题目格式无效。');
+    }
+    final size = raw['n'] as int;
+    if (size != 6 && size != 9) {
+      throw const FormatException('分享链接中的数独尺寸无效。');
+    }
+    final givens = <CellId, int>{};
+    for (final clue in raw['g'] as List<dynamic>) {
+      final parsed = _parseTriple(clue, size);
+      if (givens.containsKey(parsed.$1)) {
+        throw const FormatException('分享链接重复定义了数独数字。');
+      }
+      givens[parsed.$1] = parsed.$2;
+    }
+    return SudokuPuzzle(size: size, givens: givens);
+  }
+
+  static String encodeProgress(SudokuState state) => PuzzleShareCodec.encode({
+    'v': [
+      for (final entry in state.values.entries)
+        [entry.key.row, entry.key.column, entry.value],
+    ],
+    'm': [
+      for (final entry in state.notes.entries)
+        if (entry.value.isNotEmpty)
+          [entry.key.row, entry.key.column, entry.value.toList()..sort()],
+    ],
+  });
+
+  static SudokuState decodeProgress(String encoded, SudokuPuzzle puzzle) {
+    final raw = PuzzleShareCodec.decode(encoded);
+    if (raw is! Map<String, dynamic> ||
+        raw['v'] is! List ||
+        raw['m'] is! List ||
+        (raw['v'] as List).length > puzzle.size * puzzle.size ||
+        (raw['m'] as List).length > puzzle.size * puzzle.size) {
+      throw const FormatException('分享链接中的数独进度格式无效。');
+    }
+    final values = <CellId, int>{...puzzle.givens};
+    for (final entry in raw['v'] as List<dynamic>) {
+      final parsed = _parseTriple(entry, puzzle.size);
+      if (puzzle.givens.containsKey(parsed.$1)) continue;
+      if (values.containsKey(parsed.$1)) {
+        throw const FormatException('分享链接重复定义了数独数字。');
+      }
+      values[parsed.$1] = parsed.$2;
+    }
+    if (!puzzle.isConsistent(values)) {
+      throw const FormatException('分享链接中的数独进度存在冲突。');
+    }
+    final notes = <CellId, Set<int>>{};
+    for (final entry in raw['m'] as List<dynamic>) {
+      if (entry is! List ||
+          entry.length != 3 ||
+          entry[0] is! int ||
+          entry[1] is! int ||
+          entry[2] is! List) {
+        throw const FormatException('分享链接中的候选笔记格式无效。');
+      }
+      final cell = CellId(entry[0] as int, entry[1] as int);
+      final candidates = (entry[2] as List<dynamic>).toSet();
+      if (cell.row < 0 ||
+          cell.row >= puzzle.size ||
+          cell.column < 0 ||
+          cell.column >= puzzle.size ||
+          candidates.any(
+            (value) => value is! int || value < 1 || value > puzzle.size,
+          ) ||
+          puzzle.givens.containsKey(cell) ||
+          values.containsKey(cell) ||
+          notes.containsKey(cell)) {
+        throw const FormatException('分享链接包含无效的候选笔记。');
+      }
+      notes[cell] = candidates.cast<int>();
+    }
+    return SudokuState(values: values, notes: notes);
+  }
+
+  static (CellId, int) _parseTriple(Object? raw, int size) {
+    if (raw is! List ||
+        raw.length != 3 ||
+        raw[0] is! int ||
+        raw[1] is! int ||
+        raw[2] is! int) {
+      throw const FormatException('分享链接中的数独数字格式无效。');
+    }
+    final cell = CellId(raw[0] as int, raw[1] as int);
+    final value = raw[2] as int;
+    if (cell.row < 0 ||
+        cell.row >= size ||
+        cell.column < 0 ||
+        cell.column >= size ||
+        value < 1 ||
+        value > size) {
+      throw const FormatException('分享链接包含无效的数独数字。');
+    }
+    return (cell, value);
+  }
+}
+
+final class PuzzleShareCodec {
+  const PuzzleShareCodec._();
+
+  static String encode(Object value) =>
       base64Url.encode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
 
-  static Object? _decode(String value) {
+  static Object? decode(String value) {
     try {
       return jsonDecode(
         utf8.decode(base64Url.decode(base64Url.normalize(value))),
